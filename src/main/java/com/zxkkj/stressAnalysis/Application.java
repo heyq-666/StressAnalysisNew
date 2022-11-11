@@ -26,8 +26,8 @@ public class Application {
 
         try {
             //模拟入参方法，测试用
-            /*int type = 1;
-            args = simulationParam(args,type);*/
+            int type = 1;
+            args = simulationParam(args,type);
 
             ExecuteResult executeResult = new ExecuteResult();
 
