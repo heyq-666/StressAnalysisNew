@@ -1,0 +1,13 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="StressAnalysis:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/StressAnalysis_jar</output-path>
+    <root id="archive" name="StressAnalysisNew.jar">
+      <element id="module-output" name="StressAnalysisNew" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/cn/hutool/hutool-all/4.6.13/hutool-all-4.6.13.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/org/slf4j/slf4j-api/1.6.1/slf4j-api-1.6.1.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/org/slf4j/slf4j-log4j12/1.6.1/slf4j-log4j12-1.6.1.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/log4j/log4j/1.2.16/log4j-1.2.16.jar" path-in-jar="/" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/com/alibaba/fastjson/1.1.37/fastjson-1.1.37.jar" path-in-jar="/" />
+    </root>
+  </artifact>
+</component>
