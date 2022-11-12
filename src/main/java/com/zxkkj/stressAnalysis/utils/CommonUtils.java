@@ -30,11 +30,11 @@ public class CommonUtils {
         }
     }
 
-
     public static Integer calculateMaxValueInteger(List<Integer> list) {
 
         if (CollectionUtil.isEmpty(list)){
-            throw new IllegalArgumentException("Number array must not empty !");
+            //throw new IllegalArgumentException("Number array must not empty !");
+            return 0;
         }else {
             Integer maxValue = list.stream().max(Comparator.comparing(Integer::intValue)).get();
             return maxValue;
@@ -44,7 +44,8 @@ public class CommonUtils {
     public static Integer calculateMinValueInteger(List<Integer> list) {
 
         if (CollectionUtil.isEmpty(list)){
-            throw new IllegalArgumentException("Number array must not empty !");
+            //throw new IllegalArgumentException("Number array must not empty !");
+            return 0;
         }else {
             Integer minValue = list.stream().min(Comparator.comparing(Integer::intValue)).get();
             return minValue;
@@ -88,36 +89,10 @@ public class CommonUtils {
         return new BigDecimal(avg).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue();
 
     }
-    /**
-     * 平滑滤波
-     * @param list
-     * @return
-     */
-    public static List<RRData> smooth(List<RRData> list){
 
-        if (CollectionUtil.isEmpty(list)){
-            throw new IllegalArgumentException("Number array must not empty !");
-        }else {
-            List<RRData> smoothList = list;
-            int window = 5;//平滑窗口
-            int length = smoothList.size();
-
-            if (length == 3){
-                smoothList.get(length - 2).setHr(division((smoothList.get(0).getHr()+smoothList.get(1).getHr()+smoothList.get(2).getHr()),3.0));
-            }
-            if (length == 4){
-                smoothList.get(length - 3).setHr(division((smoothList.get(0).getHr()+smoothList.get(1).getHr()+smoothList.get(2).getHr()),3.0));
-                smoothList.get(length - 2).setHr(division((smoothList.get(1).getHr()+smoothList.get(2).getHr()+smoothList.get(3).getHr()),3.0));
-            }
-            if (length >= window){
-                smoothList.get(1).setHr(division((smoothList.get(0).getHr()+smoothList.get(1).getHr()+smoothList.get(2).getHr()),3.0));
-                for (int i = 2; i < smoothList.size() - 2; i++) {
-                    smoothList.get(i).setHr(division((smoothList.get(i-2).getHr()+smoothList.get(i-1).getHr()+smoothList.get(i).getHr()+smoothList.get(i+1).getHr()+smoothList.get(i+2).getHr()),5.0));
-                }
-                smoothList.get(length - 2).setHr(division((smoothList.get(length - 3).getHr() + smoothList.get(length - 2).getHr() + smoothList.get(length - 1).getHr()),3.0));
-            }
-            return smoothList;
-        }
+    public static double keepTwoDecimal(double value){
+        double twoDecimalValue = new BigDecimal(value).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue();
+        return twoDecimalValue;
     }
 
     /**
@@ -200,6 +175,105 @@ public class CommonUtils {
                     }
                     flag = 1;
                 }
+            }
+            return peakList;
+        }
+    }
+
+    public static List<PeakModel> findPeakListNew(List<Double> zxxEcgList,double minpeakheight) {
+
+        if (CollectionUtil.isEmpty(zxxEcgList)){
+            throw new IllegalArgumentException("Number array must not empty !");
+        }else {
+            int flag = 0;
+            List<PeakModel> peakList = new ArrayList<>();
+            for (int i = 0; i < zxxEcgList.size() - 1; i++) {//只记录波峰及位置
+                if (zxxEcgList.get(i + 1).compareTo(zxxEcgList.get(i)) > 0){
+                    flag = 2;
+                }else if (zxxEcgList.get(i + 1).compareTo(zxxEcgList.get(i)) < 0){
+                    if (flag == 2){
+                        if (zxxEcgList.get(i) >= minpeakheight){
+                            PeakModel peakModel = new PeakModel();
+                            peakModel.setPeakValue(zxxEcgList.get(i));
+                            peakModel.setIndex(i);
+                            peakList.add(peakModel);
+                        }
+                    }
+                    flag = 1;
+                }
+            }
+            return peakList;
+        }
+    }
+    /**
+     * 计算应激强度上包线值，下包线值，标准包线值
+     * @param fclpNum
+     * @return
+     */
+    public static List<Double[]> calculationEnvelope(int fclpNum) {
+
+        double e = Math.E;
+
+        //标准曲线
+        double standardA = 1604.7881;
+        double standardB = -0.025165;
+        double standardC = 6311.2841;
+        double standardD = -0.00016371;
+        double standardY = 0.0;
+        standardY =  standardA * Math.pow(e,standardB * fclpNum) + standardC * Math.pow(e,standardD * fclpNum);
+
+        //上限包线
+        double upperA = 2172.0256;
+        double upperB = -0.045386;
+        double upperC = 8628.093;
+        double upperD = -0.0003001;
+        double upperY = 0.0;
+        upperY =  upperA * Math.pow(e,upperB * fclpNum) + upperC * Math.pow(e,upperD * fclpNum);
+
+        //下限包线
+        double lowerA = 1159.2422;
+        double lowerB = -0.021275;
+        double lowerC = 4233.2265;
+        double lowerD = -5e-05;
+        double lowerY = 0.0;
+        lowerY =  lowerA * Math.pow(e,lowerB * fclpNum) + lowerC * Math.pow(e,lowerD * fclpNum);
+
+        List<Double[]> list = new ArrayList<>();
+        list.add(new Double[]{standardY,upperY,lowerY});
+        return list;
+    }
+
+    /**
+     * 计算波峰及位置
+     * @param ecgList
+     * @param minpeakheight
+     * @param minpeakdistance
+     * @return
+     */
+    private List<PeakModel> calPeakAndPosition(List<Double> ecgList,double minpeakheight,int minpeakdistance){
+
+        if (CollectionUtil.isEmpty(ecgList)){
+            throw new IllegalArgumentException("Number array must not empty !");
+        }else {
+            int flag = 0;
+            List<PeakModel> peakList = new ArrayList<>();
+            for (int i = 0; i < ecgList.size() - 1;) {//只记录波峰及位置
+                if (ecgList.get(i + 1).compareTo(ecgList.get(i)) > 0){
+                    flag = 2;
+                }else if (ecgList.get(i + 1).compareTo(ecgList.get(i)) < 0){
+                    if (flag == 2){
+                        if (ecgList.get(i).compareTo(minpeakheight) >= 0){
+                            PeakModel peakModel = new PeakModel();
+                            peakModel.setIndex(i);
+                            peakModel.setPeakValue(ecgList.get(i));
+                            peakList.add(peakModel);
+                            i += minpeakdistance;
+                            continue;
+                        }
+                    }
+                    flag = 1;
+                }
+                i++;
             }
             return peakList;
         }

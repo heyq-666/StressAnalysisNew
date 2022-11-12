@@ -56,4 +56,8 @@ public class AnalysisReult implements Serializable {
      * RR间期数组
      */
     List<Double> RRList = new ArrayList<>();
+
+    Double[] fclpBeforeData = new Double[3];
+
+    Double[] fclpAfterData = new Double[3];
 }

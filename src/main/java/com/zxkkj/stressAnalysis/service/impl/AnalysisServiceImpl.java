@@ -27,9 +27,6 @@ public class AnalysisServiceImpl implements IAnalysisService {
     private final double fclpIndex1 = (1.3 * 60) / 0.02;
     private final double fclpIndex2 = (4.5 * 60) / 0.02;
 
-    private final int segment1 = 1500;//段落心率数
-    private final int segment0 = 50;//段落递进心率数
-
     @Override
     public List<Integer> loadDataByLoaclFile(File file) throws IOException {
 
@@ -80,40 +77,244 @@ public class AnalysisServiceImpl implements IAnalysisService {
         //提取每秒的心率数据
         List<Double> hrList = this.getHrList(RRList);
         analysisReult.setHrList(hrList);
+
         //FCLP段识别
         List<Integer[]> fclpList = this.FCLPIdentity(RRList);
-
-        //非FCLP段HRV计算
-        List<HRVIndex> hrvList = new ArrayList<>();
-
         analysisReult.setFclpList(fclpList);
+
+        //FCLP段应激强度计算
+        List<StressIntensityModel> stressList = this.FCLPStressIntensityNew(analysisReult,fclpList,RRList);
+
+        //应激强度高中低判断
+        this.judgeStressIntensity(analysisReult,stressList);
+
+        //非fclp段HRV计算
+        this.calculationNoFclpHrv(fclpList,stressList,RRList,analysisReult);
+
+        return analysisReult;
+    }
+
+    /**
+     * 应激强度高中低判断
+     * @param analysisReult
+     * @param stressList
+     */
+    private void judgeStressIntensity(AnalysisReult analysisReult,List<StressIntensityModel> stressList) {
+        if (analysisReult.getFclpIsExit() == 1){
+            //先计算判断应激强度高中低的上线包线
+            List<Double[]> EnvelopeList = CommonUtils.calculationEnvelope(Integer.valueOf(1));
+            //根据应激强度高中低的上线包线来计算应激强度高、中、低
+            List<EvaluatConclusion> streeStatus = this.calculatioStreeStatus(EnvelopeList,stressList,stressList.size(),1);
+            analysisReult.setEvaluatConclusionList(streeStatus);
+        }
+    }
+
+    /**
+     * 非FCLP段HRV指标计算
+     * @param stressList
+     * @param RRList
+     * @param analysisReult
+     */
+    private void calculationNoFclpHrv(List<Integer[]> fclpList,List<StressIntensityModel> stressList, List<RRData> RRList, AnalysisReult analysisReult) {
+
+        List<Integer[]> fclpNo = new ArrayList<>();
+
+        /*fclpNo.add(new Integer[]{1,fclpList.get(0)[0]});
+        fclpNo.add(new Integer[]{fclpList.get(fclpList.size()-1)[1],RRList.size()-1});*/
+        if (fclpList.size() == 0 || fclpList == null){
+            fclpNo.add(new Integer[]{0,RRList.size() - 1});
+            //fclp前的心率均值、最大值、最小值
+            List<RRData> listBeforeFclp = RRList.subList(fclpNo.get(0)[0],fclpNo.get(0)[1]);
+            double fclpBeforeMean = CommonUtils.mean(listBeforeFclp);
+            double fclpBeforeMax = listBeforeFclp.stream().mapToDouble(RRData::getHr).max().getAsDouble();
+            double fclpBeforeMin = listBeforeFclp.stream().mapToDouble(RRData::getHr).min().getAsDouble();
+            Double[] fclpBeforeData = new Double[]{fclpBeforeMean,fclpBeforeMax,fclpBeforeMin};
+            analysisReult.setFclpBeforeData(fclpBeforeData);
+        }else {
+            fclpNo.add(new Integer[]{0,stressList.get(0).getStartTime() - 1});
+            fclpNo.add(new Integer[]{stressList.get(stressList.size()-1).getEndTime() + 1,RRList.size() - 1});
+            //fclp前的心率均值、最大值、最小值
+            List<RRData> listBeforeFclp = RRList.subList(fclpNo.get(0)[0],fclpNo.get(0)[1]);
+            double fclpBeforeMean = CommonUtils.mean(listBeforeFclp);
+            double fclpBeforeMax = listBeforeFclp.stream().mapToDouble(RRData::getHr).max().getAsDouble();
+            double fclpBeforeMin = listBeforeFclp.stream().mapToDouble(RRData::getHr).min().getAsDouble();
+            Double[] fclpBeforeData = new Double[]{fclpBeforeMean,fclpBeforeMax,fclpBeforeMin};
+
+            //fclp后的心率均值、最大值、最小值
+            List<RRData> listAfterFclp = RRList.subList(fclpNo.get(1)[0],fclpNo.get(1)[1]);
+            double fclpAfterMean = CommonUtils.mean(listAfterFclp);
+            double fclpAfterMax = listAfterFclp.stream().mapToDouble(RRData::getHr).max().getAsDouble();
+            double fclpAfterMin = listAfterFclp.stream().mapToDouble(RRData::getHr).min().getAsDouble();
+            Double[] fclpAfterData = new Double[]{fclpAfterMean,fclpAfterMax,fclpAfterMin};
+
+            analysisReult.setFclpBeforeData(fclpBeforeData);
+            analysisReult.setFclpAfterData(fclpAfterData);
+        }
+        List<HRVIndex> hrvList = new ArrayList<>();
+        //提取RR间期数组
+        List<Double> RRIntervalDataList = RRList.stream().map(RRData::getRRIntervalData).collect(Collectors.toList());
+        //开始计算hrv指标
+        for (int i = 0; i < fclpNo.size(); i++) {
+            //HRV段的RR均值
+            double meanRR = CommonUtils.avg(RRIntervalDataList.subList(fclpNo.get(i)[0],fclpNo.get(i)[1]));
+            double SDNN = 0.0;
+            double RMSSD = 0.0;
+            double SDANN = 0.0;
+            double SDNNIndex = 0.0;
+            int NN50 = 0;
+            double fiveMRR = 0.0;
+            List<Integer> fiveNote = new ArrayList<>();
+            for (int j = fclpNo.get(i)[0]; j < fclpNo.get(i)[1]; j++) {
+                SDNN += Math.pow(RRList.get(j).getRRIntervalData() - meanRR,2);
+                if (j < fclpNo.get(i)[1]){
+                    RMSSD += Math.pow(RRList.get(j + 1).getRRIntervalData()- RRList.get(j).getRRIntervalData(),2);
+                }
+                //划分5分钟RR间期
+                fiveMRR += RRIntervalDataList.get(j);
+                if (fiveMRR >= 300){
+                    fiveMRR = 0.0;
+                    fiveNote.add(j);
+                }
+                //NN50计算
+                if ((RRIntervalDataList.get(j + 1) - RRIntervalDataList.get(j)) > 0.05 ){
+                    NN50 += 1;
+                }
+            }
+            HRVIndex hrvIndex = new HRVIndex();
+            hrvIndex.setSDNN(CommonUtils.keepTwoDecimal(Math.sqrt((SDNN / (fclpNo.get(i)[1] - fclpNo.get(i)[0] + 1))) * 1000));
+            hrvIndex.setRMSSD(CommonUtils.keepTwoDecimal(Math.sqrt((RMSSD / (fclpNo.get(i)[1] - fclpNo.get(i)[0]))) * 1000));
+            hrvIndex.setNN50(NN50);
+
+            List<Double> RRqList = new ArrayList<>();
+            double RRqTotal = 0.0;
+            List<Double> SDNNIndexFiveList = new ArrayList<>();
+            for (int j = 0; j < fiveNote.size() - 1; j++) {
+                double SDNNIndexFive = 0.0;
+                double fiveIndexAvg = 0.0;
+                if (j == 0){
+                    //计算SDANN过程
+                    double RRq = CommonUtils.avg(RRIntervalDataList.subList(0,fiveNote.get(j)));//5分钟RR均值
+                    RRqList.add(RRq);
+                    RRqTotal += RRq;
+                    //计算SDNNIndex过程
+                    for (int k = 0; k < fiveNote.get(j); k++) {
+                        SDNNIndexFive = Math.pow((RRIntervalDataList.get(k) - RRq),2);
+                    }
+                }else {
+                    double RRq = CommonUtils.avg(RRIntervalDataList.subList(fiveNote.get(j),fiveNote.get(j + 1)));
+                    RRqList.add(RRq);
+                    RRqTotal += RRq;
+                    //计算SDNNIndex过程
+                    for (int k = fiveNote.get(j); k < fiveNote.get(j + 1); k++) {
+                        SDNNIndexFive = Math.pow((RRIntervalDataList.get(k) - RRq),2);
+                    }
+                }
+                fiveIndexAvg = SDNNIndexFive / fiveNote.get(j);
+                //每5分钟内RR间期标准差
+                fiveIndexAvg = (Math.sqrt(fiveIndexAvg)) * 1000;
+                SDNNIndexFiveList.add(fiveIndexAvg);
+            }
+            for (int j = 0; j < SDNNIndexFiveList.size(); j++) {
+                SDNNIndex += SDNNIndexFiveList.get(j);
+            }
+            if (fiveNote.size() > 0){
+                SDNNIndex = SDNNIndex / fiveNote.size();
+            }
+            double RRFiveMin = RRqTotal / fiveNote.size();
+            for (int j = 0; j < RRqList.size(); j++) {
+                SDANN += Math.pow((RRqList.get(j) - RRFiveMin),2);
+            }
+
+            if (fiveNote.size() > 0 ){
+                hrvIndex.setSDANN(new BigDecimal(Math.sqrt((SDANN / fiveNote.size())) * 1000).setScale(4,BigDecimal.ROUND_HALF_UP).doubleValue());
+            }
+
+            hrvIndex.setSDNNIndex(new BigDecimal(SDNNIndex).setScale(4,BigDecimal.ROUND_HALF_UP).doubleValue());
+            hrvIndex.setNN50(NN50);
+            hrvIndex.setPNN50(CommonUtils.division(NN50,(fclpNo.get(i)[1] - fclpNo.get(i)[0])) * 100);
+            //频域指标计算-暂时从给定的范围随机取
+            hrvIndex.setHF(CommonUtils.randomDouble(772.0,1178.0));
+            hrvIndex.setLF(CommonUtils.randomDouble(754.0,1586.0));
+            hrvIndex.setLFNorm(CommonUtils.randomDouble(30.0,78.0));
+            hrvIndex.setHFNorm(CommonUtils.randomDouble(26.0,32.0));
+            hrvIndex.setLFAndHFRatio(CommonUtils.randomDouble(1.5,2.0));
+            hrvList.add(hrvIndex);
+        }
+        analysisReult.setHrvList(hrvList);
+    }
+
+    /**
+     * FCLP应激强度计算
+     * @param fclpList
+     * @param RRList
+     * @return
+     */
+    private List<StressIntensityModel> FCLPStressIntensityNew(AnalysisReult analysisReult,List<Integer[]> fclpList, List<RRData> RRList) {
+
         List<StressIntensityModel> stressList = new ArrayList<>();
 
-        //FCLP个数统计
-        int fclp = 0;
-        double calculationIndex = 0.02d;
-        if (fclpList != null && fclpList.size() > 0){//有fclp才计算fclp应激强度
-            //FCLP段应激强度计算
-            stressList = this.FCLPStressIntensity(fclpList,RRList,calculationIndex);
-            fclp += stressList.size();
-            //根据前次的fclp确定应激强度上包线值，下包线值，标准包线值，从而确定应激强度范围，应激适应度阶段，应激稳定度范围
-            //暂定前次fclp序号为1，后续以传入文件中的fclp序号为准
-            List<Double[]> EnvelopeList = this.calculationEnvelope(1);
-            //计算每个fclp的应激强度低（中、高），应激适应度阶段，应激稳定度
-            List<EvaluatConclusion> streeStatus = this.calculatioStreeStatus(EnvelopeList,stressList,fclpList.size(),1);
-            //非FCLP段HRV计算
-            hrvList = this.calculationHRV(fclpList,RRList);
-            analysisReult.setStressIntensityModelList(stressList);//应激强度值及对应的起始结束时刻
-            analysisReult.setEvaluatConclusionList(streeStatus);
-            analysisReult.setFclpIsExit(1);
-        }else {
-            hrvList = this.calculationHRV(fclpList,RRList);
-            analysisReult.setFclpIsExit(0);
-        }
+        if (CollectionUtil.isEmpty(fclpList) || CollectionUtil.isEmpty(RRList)){
 
-        analysisReult.setHrvList(hrvList);
-        analysisReult.setFclpNum(fclp);
-        return analysisReult;
+            StressIntensityModel intensityModel = new StressIntensityModel();
+            intensityModel.setStartTime(0);
+            intensityModel.setEndTime(0);
+            intensityModel.setStressIntensityIndex(0);
+            intensityModel.setStressIntensityValue(0);
+            stressList.add(intensityModel);
+            analysisReult.setStressIntensityModelList(stressList);
+            analysisReult.setFclpNum(0);
+            analysisReult.setFclpIsExit(0);
+            return stressList;
+        }else {
+
+            for (int i = 0; i < fclpList.size(); i++) {
+                List<RRData> fclpHr = RRList.subList(fclpList.get(i)[0],fclpList.get(i)[1]);
+                //平滑窗口
+                int window = (int) Math.ceil((fclpList.get(i)[1] - fclpList.get(i)[0]) / 10);
+                List<RRData> fclpHrSmooth = CommonUtils.smoothNew(fclpHr,0,fclpHr.size()-1,window);
+                double meanFclpHr = CommonUtils.mean(fclpHrSmooth);
+                List<Double> fclpHrSmoothNew = fclpHrSmooth.stream().map(item -> {
+                    double hr = CommonUtils.keepTwoDecimal(item.getHr() - meanFclpHr);
+                    return hr;
+                }).collect(Collectors.toList());
+                //检查该段心率波形穿越0轴的各点
+                List<Integer> passZeroList = new ArrayList<>();
+                for (int j = 0; j < fclpHrSmoothNew.size() - 1; j++) {
+                    if (fclpHrSmoothNew.get(j + 1) * fclpHrSmoothNew.get(j) < 0){
+                        passZeroList.add(j);
+                    }
+                }
+                //处理各过0点之间的数据
+                for (int j = 0; j < passZeroList.size() - 1; j++) {
+                    double max = CommonUtils.calculateMaxValue(fclpHrSmoothNew.subList(passZeroList.get(j),passZeroList.get(j+1)));
+                    double maxAbs = Math.abs(max);
+                    double min = CommonUtils.calculateMinValue(fclpHrSmoothNew.subList(passZeroList.get(j),passZeroList.get(j+1)));
+                    double minAbs = Math.abs(min);
+                    //如果最大值幅度大于最小值幅度，说明该段心率有波峰
+                    if (maxAbs > minAbs){
+                        StressIntensityModel intensityModel = new StressIntensityModel();
+                        intensityModel.setStartTime(passZeroList.get(j));
+                        intensityModel.setEndTime(passZeroList.get(j+1));
+                        //在两个过0点之间计算应激强度
+                        for (int k = passZeroList.get(j); k < passZeroList.get(j + 1); k++) {
+                            //应激强度计算因子
+                            double CalculationFactor1 = intensityModel.getStressIntensityValue();
+                            double CalculationFactor2 = fclpHr.get(k).getHr();
+                            double CalculationFactor3 = RRList.get(fclpList.get(i)[0] + k).getSamplingNum() - RRList.get(fclpList.get(i)[0] + k - 1).getSamplingNum();
+                            double CalculationFactor4 = 0.02d;
+                            double stressIntensityValue = new BigDecimal(CalculationFactor1 + CalculationFactor2 * CalculationFactor3 * CalculationFactor4)
+                                    .setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue();
+                            intensityModel.setStressIntensityValue(stressIntensityValue);
+                        }
+                        stressList.add(intensityModel);
+                    }
+                }
+            }
+            analysisReult.setStressIntensityModelList(stressList);
+            analysisReult.setFclpNum(stressList.size());
+            analysisReult.setFclpIsExit(1);
+            return stressList;
+        }
     }
 
     @Override
@@ -153,22 +354,37 @@ public class AnalysisServiceImpl implements IAnalysisService {
                 for (int i = 0; i < stressList.size(); i++) {
                     stressIntensityValue += stressList.get(i).getStressIntensityValue();
                 }
-                stressIntensityValue = new BigDecimal((stressIntensityValue / stressList.size())).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue();
-                StressIntensityModel intensityModel = new StressIntensityModel();
-                intensityModel.setStartTime(stressList.get(0).getStartTime());
-                intensityModel.setEndTime(stressList.get(stressList.size() - 1).getEndTime());
-                intensityModel.setStressIntensityValue(stressIntensityValue);
-                stressListNew.add(intensityModel);
+                if (stressList.size() > 0){//如果手动选取的fclp识别不出来应激动作，那视为无fclp，只计算hrv
+                    stressIntensityValue = new BigDecimal((stressIntensityValue / stressList.size())).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue();
+                    StressIntensityModel intensityModel = new StressIntensityModel();
+                    intensityModel.setStartTime(stressList.get(0).getStartTime());
+                    intensityModel.setEndTime(stressList.get(stressList.size() - 1).getEndTime());
+                    intensityModel.setStressIntensityValue(stressIntensityValue);
+                    stressListNew.add(intensityModel);
 
-                //计算每个fclp的应激强度低（中、高），应激适应度阶段，应激稳定度
-                List<Double[]> EnvelopeList = this.calculationEnvelope(Integer.valueOf(fclpNum));
-                List<EvaluatConclusion> streeStatus = this.calculatioStreeStatus(EnvelopeList,stressListNew,1,Integer.valueOf(fclpNum));
-                //结果记录
-                analysisReult.setFclpIsExit(1);
-                //analysisReult.setFclpNum(stressList.size());
-                analysisReult.setFclpNum(1);//手动选取单次fclp，故输出的fclp次数始终为1
-                analysisReult.setStressIntensityModelList(stressListNew);
-                analysisReult.setEvaluatConclusionList(streeStatus);
+                    //计算每个fclp的应激强度低（中、高），应激适应度阶段，应激稳定度
+                    List<Double[]> EnvelopeList = CommonUtils.calculationEnvelope(Integer.valueOf(fclpNum));
+                    List<EvaluatConclusion> streeStatus = this.calculatioStreeStatus(EnvelopeList,stressListNew,1,Integer.valueOf(fclpNum));
+                    //结果记录
+                    analysisReult.setFclpIsExit(1);
+                    analysisReult.setFclpNum(1);//手动选取单次fclp，故输出的fclp次数始终为1
+                    analysisReult.setStressIntensityModelList(stressListNew);
+                    analysisReult.setEvaluatConclusionList(streeStatus);
+                }else {
+                    //通过心率求RR间期
+                    List<Double> RRList = hrvList.stream().map(item -> {
+                        double RR = new BigDecimal((60 / item)).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue();
+                        return RR;
+                    }).collect(Collectors.toList());
+
+                    //基于fclp前/后的心率数据进行分析
+                    //计算hrv指标
+                    List<HRVIndex> hrvIndexList = new ArrayList<>();
+                    this.calculationHRVCommon(0,RRList.size(),RRList,hrvIndexList);
+                    //结果记录
+                    analysisReult.setFclpIsExit(0);
+                    analysisReult.setHrvList(hrvIndexList);
+                }
             }else {
                 throw new RuntimeException("parameter transfer error");
             }
@@ -218,7 +434,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
         //输出心率数组，以产生心率的时间为第一时间
         List<Double> hrList = new ArrayList<>();
         for (int i = 0; i < endList.size(); i++) {
-            hrList.add(endList.get(i).getHr());
+            hrList.add(CommonUtils.keepTwoDecimal(endList.get(i).getHr()));
         }
         return hrList;
     }
@@ -411,7 +627,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
     }
 
     /**
-     * FCLP间期应激强度计算
+     * FCLP间期应激强度计算-手动选点
      * @param rrList
      * @return
      */
@@ -425,11 +641,64 @@ public class AnalysisServiceImpl implements IAnalysisService {
             rrData.setSamplingNum(i);
             list.add(rrData);
         }
-
         list = CommonUtils.smoothNew(list,0,list.size() - 1,(list.size() / 10));
         List<Integer[]> fclpList = new ArrayList<>();
         fclpList.add(new Integer[]{0,rrList.size()});
-        List<StressIntensityModel> stressIntensityModelList = this.FCLPStressIntensity(fclpList,list,1);
+        //开始计算应激强度
+        List<StressIntensityModel> stressIntensityModelList = new ArrayList<>();
+        for (int i = 0; i < fclpList.size(); i++) {
+
+            int subStartIndex = fclpList.get(i)[0];
+            int subEndIndex = fclpList.get(i)[1];
+            List<RRData> fclpListSub = list.subList(subStartIndex,subEndIndex > rrList.size() ? rrList.size() : subEndIndex);
+            List<RRData> fclpListSubSmooth = CommonUtils.smoothNew(fclpListSub,0,fclpListSub.size() - 1,100);
+            double smoothListMax = fclpListSubSmooth.stream().max(Comparator.comparing(RRData::getHr)).get().getHr();
+            double smoothListMin = fclpListSubSmooth.stream().min(Comparator.comparing(RRData::getHr)).get().getHr();
+            double smoothTemp = CommonUtils.keepTwoDecimal((smoothListMax + smoothListMin) / 2);
+
+            List<Double> smoothListTemp = fclpListSubSmooth.stream().map(item -> {
+                double hr = item.getHr() - smoothTemp;
+                return hr;
+            }).collect(Collectors.toList());
+
+            List<Integer> passZeroHrNumList = new ArrayList<>();
+            for (int j = 0; j < smoothListTemp.size() - 1; j++) {
+                if (smoothListTemp.get(j) == 0.0 && j > 0){
+                    if (smoothListTemp.get(j - 1) * smoothListTemp.get(j+1) < 0){
+                        passZeroHrNumList.add(j);
+                    }
+                }else if (smoothListTemp.get(j) * smoothListTemp.get(j+1) < 0){
+                    passZeroHrNumList.add(j+1);
+                }
+            }
+            //处理各过0点之间的数据
+            for (int j = 0; j < passZeroHrNumList.size() - 1; j++) {
+                List<RRData> twoZeroHrInterval = fclpListSubSmooth.subList(passZeroHrNumList.get(j),passZeroHrNumList.get(j+1));
+                //提取心率数据
+                List<Double> hrInterval = twoZeroHrInterval.stream().map(RRData::getHr).collect(Collectors.toList());
+                double maxAbs = Math.abs(CommonUtils.calculateMaxValue(hrInterval));
+                //求两个过0点之间的最小心率的绝对值
+                double minAbs = Math.abs(CommonUtils.calculateMinValue(hrInterval));
+                //如果最大值幅度大于最小值幅度，说明该段心率有波峰
+                if (maxAbs > minAbs){
+                    StressIntensityModel intensityModel = new StressIntensityModel();
+                    //记录此次fclp心率峰值段
+                    intensityModel.setStartTime(passZeroHrNumList.get(j) + subStartIndex);
+                    intensityModel.setEndTime(passZeroHrNumList.get(j+1) + subStartIndex);
+                    double stressIntensityValue = 0.0;//该段应激强度初值
+                    //计算应激强度
+                    for (int k = passZeroHrNumList.get(j); k < passZeroHrNumList.get(j+1); k++) {
+                        //该fclp段当前时刻的心率
+                        double hrValueCurrentFclp = fclpListSub.get(k).getHr();
+                        double fclpintervalHr1 = list.get(fclpList.get(i)[0] + k).getSamplingNum();
+                        double fclpintervalHr2 = list.get(fclpList.get(i)[0] + k - 1).getSamplingNum();
+                        stressIntensityValue += (hrValueCurrentFclp * (fclpintervalHr1 - fclpintervalHr2) * 0.02d);
+                    }
+                    intensityModel.setStressIntensityValue(CommonUtils.keepTwoDecimal(stressIntensityValue));
+                    stressIntensityModelList.add(intensityModel);
+                }
+            }
+        }
         return stressIntensityModelList;
     }
 
@@ -486,99 +755,6 @@ public class AnalysisServiceImpl implements IAnalysisService {
         }
         streeStatusList.add(evaluatConclusion);
         return streeStatusList;
-    }
-
-    /**
-     * 计算应激强度上包线值，下包线值，标准包线值
-     * @param fclpNum
-     * @return
-     */
-    private List<Double[]> calculationEnvelope(int fclpNum) {
-
-        double e = Math.E;
-
-        //标准曲线
-        double standardA = 1604.7881;
-        double standardB = -0.025165;
-        double standardC = 6311.2841;
-        double standardD = -0.00016371;
-        double standardY = 0.0;
-        standardY =  standardA * Math.pow(e,standardB * fclpNum) + standardC * Math.pow(e,standardD * fclpNum);
-
-        //上限包线
-        double upperA = 2172.0256;
-        double upperB = -0.045386;
-        double upperC = 8628.093;
-        double upperD = -0.0003001;
-        double upperY = 0.0;
-        upperY =  upperA * Math.pow(e,upperB * fclpNum) + upperC * Math.pow(e,upperD * fclpNum);
-
-        //下限包线
-        double lowerA = 1159.2422;
-        double lowerB = -0.021275;
-        double lowerC = 4233.2265;
-        double lowerD = -5e-05;
-        double lowerY = 0.0;
-        lowerY =  lowerA * Math.pow(e,lowerB * fclpNum) + lowerC * Math.pow(e,lowerD * fclpNum);
-
-        List<Double[]> list = new ArrayList<>();
-        list.add(new Double[]{standardY,upperY,lowerY});
-        return list;
-    }
-
-    /**
-     * 非FCLP段HRV计算
-     * @param fclpList
-     * @param rrList
-     */
-    private List<HRVIndex> calculationHRV(List<Integer[]> fclpList, List<RRData> rrList) {
-
-        List<Integer[]> noFCLPList = new ArrayList<>();
-        Integer noFclpBeforeTime = null;
-        Integer noFclpAfterTime = null;
-        double beforeAvg = 0.0d;
-        List<Double> hr = new ArrayList<>();
-        //提取心率
-        for (int i = 0; i < rrList.size(); i++) {
-            hr.add(rrList.get(i).getHr());
-        }
-        if (fclpList == null || fclpList.size() == 0){//无fclp
-            noFclpBeforeTime = rrList.size();
-            noFCLPList.add(new Integer[]{0,noFclpBeforeTime});
-            double nofclpAvg = CommonUtils.avg(hr);
-            double nofclpMax = CommonUtils.calculateMaxValue(hr);
-            double nofclpMin = CommonUtils.calculateMinValue(hr);
-            Double[] beforeFclpHrData = new Double[]{nofclpAvg,nofclpMax,nofclpMin};
-        }else{
-            //非fclp段数组,即fclp前和fclp后
-            noFCLPList.add(new Integer[]{0,fclpList.get(0)[0] - 1});
-            noFCLPList.add(new Integer[]{fclpList.get(fclpList.size()-1)[1]+1,rrList.size()});
-            List<Double> hrSubBefore = hr.subList(noFCLPList.get(0)[0],noFCLPList.get(0)[1]);
-            beforeAvg = CommonUtils.avg(hrSubBefore);
-            //fclp前平均心率、最大心率、最小心率
-            double beforeMax = CommonUtils.calculateMaxValue(hrSubBefore);
-            double beforeMin = CommonUtils.calculateMinValue(hrSubBefore);
-            Double[] beforeFclpHrData = new Double[]{beforeAvg,beforeMax,beforeMin};
-
-            //fclp后平均心率、最大心率、最小心率
-            List<Double> hrSubAfter = hr.subList(noFCLPList.get(1)[0],noFCLPList.get(1)[1]);
-            double afterAvg = CommonUtils.avg(hrSubAfter);
-            double afterMax = CommonUtils.calculateMaxValue(hrSubAfter);
-            double afterMin = CommonUtils.calculateMinValue(hrSubAfter);
-            Double[] afterFclpHrData = new Double[]{afterAvg,afterMax,afterMin};
-        }
-
-        List<Double> RRIntervalDataList = new ArrayList<>();
-        for (int i = 0; i < rrList.size(); i++) {//提取RR间期数据
-            RRIntervalDataList.add(rrList.get(i).getRRIntervalData());
-        }
-        List<HRVIndex> hrvList = new ArrayList<>();
-
-        for (int i = 0; i < noFCLPList.size(); i++) {
-            //非fclp段HRV计算
-            this.calculationHRVCommon(noFCLPList.get(i)[0],noFCLPList.get(i)[1],RRIntervalDataList,hrvList);
-        }
-        return hrvList;
     }
 
     /**
@@ -667,7 +843,6 @@ public class AnalysisServiceImpl implements IAnalysisService {
         }
         hrvIndex.setSDNNIndex(new BigDecimal(SDNNIndex).setScale(4,BigDecimal.ROUND_HALF_UP).doubleValue());
         hrvIndex.setNN50(NN50);
-        //PNN50 = NN50 / 总NN间期数
         hrvIndex.setPNN50(CommonUtils.division(NN50,(end - start)) * 100);
         //频域指标计算-暂时从给定的范围随机取
         hrvIndex.setHF(CommonUtils.randomDouble(772.0,1178.0));
@@ -679,164 +854,80 @@ public class AnalysisServiceImpl implements IAnalysisService {
     }
 
     /**
-     * FCLP段应激强度计算
-     * @param fclpList
-     */
-    private List<StressIntensityModel> FCLPStressIntensity(List<Integer[]> fclpList,List<RRData> rrList,double calculationIndex) {
-
-        List<StressIntensityModel> stressList = new ArrayList();//各fclp应激强度数组
-        for (int i = 0; i < fclpList.size(); i++) {
-
-            int subStartIndex = fclpList.get(i)[0];
-            int subEndIndex = fclpList.get(i)[1];
-            List<RRData> fclpListSub = rrList.subList(subStartIndex,subEndIndex > rrList.size() ? rrList.size() : subEndIndex);
-            //List<RRData> fclpListSubSmooth = CommonUtils.smoothNew(fclpListSub, 0, fclpListSub.size() - 1,(subEndIndex - subStartIndex)/10);
-            List<RRData> fclpListSubSmooth = CommonUtils.smoothNew(fclpListSub,0,fclpListSub.size() - 1,100);
-            /*double fclpHrAvg = CommonUtils.mean(fclpListSubSmooth);
-            for (int j = 0; j < fclpListSubSmooth.size(); j++) {
-                fclpListSubSmooth.get(j).setHr(CommonUtils.sub(fclpListSubSmooth.get(j).getHr(),fclpHrAvg));
-            }*/
-
-            double smoothListMax = fclpListSubSmooth.stream().max(Comparator.comparing(RRData::getHr)).get().getHr();
-            double smoothListMin = fclpListSubSmooth.stream().min(Comparator.comparing(RRData::getHr)).get().getHr();
-            double smoothTemp = new BigDecimal((smoothListMax + smoothListMin) / 2).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue();
-            List<Double> smoothListTemp = new ArrayList<>();
-            for (int j = 0; j < fclpListSubSmooth.size(); j++) {
-                smoothListTemp.add(fclpListSubSmooth.get(j).getHr() - smoothTemp);
-            }
-            List<Integer> passZeroHrNumList = new ArrayList<>();
-            //逐点检查该段心率波形穿越0轴的各点
-            /*for (int j = 0; j < smoothListTemp.size() - 1; j++) {
-                if (smoothListTemp.get(j) * smoothListTemp.get(j + 1) < 0){
-                    passZeroHrNumList.add(j);
-                }
-            }*/
-            for (int j = 0; j < smoothListTemp.size() - 1; j++) {
-                if (smoothListTemp.get(j) == 0.0 && j > 0){
-                    if (smoothListTemp.get(j - 1) * smoothListTemp.get(j+1) < 0){
-                        passZeroHrNumList.add(j);
-                    }
-                }else if (smoothListTemp.get(j) * smoothListTemp.get(j+1) < 0){
-                    passZeroHrNumList.add(j+1);
-                }
-            }
-            //处理各过0点之间的数据
-            for (int j = 0; j < passZeroHrNumList.size() - 1; j++) {
-                //两个过0点之间的最大心率的绝对值
-                List<RRData> twoZeroHrInterval = fclpListSubSmooth.subList(passZeroHrNumList.get(j),passZeroHrNumList.get(j+1));
-                List<Double> hrInterval = new ArrayList<>();
-                //提取心率数据
-                for (int k = 0; k < twoZeroHrInterval.size(); k++) {
-                    hrInterval.add(twoZeroHrInterval.get(k).getHr());
-                }
-                double maxAbs = Math.abs(CommonUtils.calculateMaxValue(hrInterval));
-                //求两个过0点之间的最小心率的绝对值
-                double minAbs = Math.abs(CommonUtils.calculateMinValue(hrInterval));
-                //如果最大值幅度大于最小值幅度，说明该段心率有波峰
-                if (maxAbs > minAbs){
-                    StressIntensityModel intensityModel = new StressIntensityModel();
-                    //记录此次fclp心率峰值段
-                    intensityModel.setStartTime(passZeroHrNumList.get(j) + subStartIndex);
-                    intensityModel.setEndTime(passZeroHrNumList.get(j+1) + subStartIndex);
-                    double stressIntensityValue = 0.0;//该段应激强度初值
-                    //计算应激强度
-                    for (int k = passZeroHrNumList.get(j); k < passZeroHrNumList.get(j+1); k++) {
-                        //该fclp段当前时刻的心率
-                        double hrValueCurrentFclp = fclpListSub.get(k).getHr();
-                        double fclpintervalHr1 = rrList.get(fclpList.get(i)[0] + k).getSamplingNum();
-                        double fclpintervalHr2 = rrList.get(fclpList.get(i)[0] + k - 1).getSamplingNum();
-                        stressIntensityValue += (hrValueCurrentFclp * (fclpintervalHr1 - fclpintervalHr2) * calculationIndex);
-                    }
-                    intensityModel.setStressIntensityValue(new BigDecimal(stressIntensityValue).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue());
-                    stressList.add(intensityModel);
-                }
-            }
-        }
-        return stressList;
-    }
-
-    /**
      * FCLP段识别
-     * @param rrList
+     * @param hrList
      */
-    private List<Integer[]> FCLPIdentity(List<RRData> rrList) {
+    private List<Integer[]> FCLPIdentity(List<RRData> hrList) {
 
-        int startHrIndex = 0;//起始心心率位置
-
-        List<Integer[]> fclpList = new ArrayList<>();//各fclp段数据
-
-        while (startHrIndex < rrList.size()){
-
-            if ((startHrIndex + segment1) < rrList.size()){
-
-                startHrIndex = this.findFclp(startHrIndex,1,rrList,fclpList);
-
-            }else {//若不够一个判断长度，则按segment0心率长度进行判断，并置序号为心率尾序号,结束判断过程
-                if ((rrList.size() - startHrIndex) > segment0){
-
-                    startHrIndex = this.findFclp(startHrIndex,2,rrList,fclpList);
-
+        //各fclp段数据
+        List<Integer[]> fclpList = new ArrayList<>();
+        int startHrIndex = 1;
+        int segmentNew1=2000;
+        int segmentNew0=100;
+        while (startHrIndex < hrList.size()){
+            if (startHrIndex + segmentNew1 - 1 < hrList.size()){
+                List<RRData> hrListSub = hrList.subList(startHrIndex,(startHrIndex + segmentNew1));
+                List<RRData> hrListSmooth = CommonUtils.smoothNew(hrListSub,0,hrListSub.size() - 1,100);
+                double means = CommonUtils.mean(hrListSmooth);
+                List<Double> hrListEnd = hrListSmooth.stream().map(item -> {
+                    double hr = CommonUtils.keepTwoDecimal(item.getHr() - means);
+                    return hr;
+                }).collect(Collectors.toList());
+                //获取心率过0点位置
+                List<Integer> passZeroHrNumList = new ArrayList<>();
+                for (int i = 0; i < hrListEnd.size() - 1; i++) {
+                    if (hrListEnd.get(i) * hrListEnd.get(i+1) < 0){
+                        passZeroHrNumList.add(i);
+                    }
+                }
+                //过0点心率的间隔
+                List<Integer> passZeroIntervalNum = new ArrayList<>();
+                for (int i = 0; i < passZeroHrNumList.size() - 1; i++) {
+                    passZeroIntervalNum.add(passZeroHrNumList.get(i + 1) - passZeroHrNumList.get(i));
+                }
+                int passZeroMin = CommonUtils.calculateMinValueInteger(passZeroIntervalNum);
+                int passZeroMax = CommonUtils.calculateMaxValueInteger(passZeroIntervalNum);
+                int sub = passZeroMax - passZeroMin;
+                if (passZeroHrNumList.size() > 2 && passZeroMin > 105 && sub < 200){
+                    fclpList.add(new Integer[]{startHrIndex,startHrIndex + segmentNew1 - 1});
+                    startHrIndex += segmentNew1;
                 }else {
-                    startHrIndex = rrList.size();
+                    startHrIndex += segmentNew0;
+                }
+            }else {//若不够一个判断长度，则按segment0心率长度进行判断
+                if (hrList.size() - startHrIndex > segmentNew0){
+                    List<RRData> hrListSub = hrList.subList(startHrIndex,(startHrIndex + segmentNew0 - 1));
+                    List<RRData> hrListSmooth = CommonUtils.smoothNew(hrListSub,0,hrListSub.size() - 1,100);
+                    double means = CommonUtils.mean(hrListSmooth);
+                    List<Double> hrListEnd = hrListSmooth.stream().map(item -> {
+                        double hr = CommonUtils.keepTwoDecimal(item.getHr() - means);
+                        return hr;
+                    }).collect(Collectors.toList());
+                    //获取心率过0点位置
+                    List<Integer> passZeroHrNumList = new ArrayList<>();
+                    for (int i = 0; i < hrListEnd.size() - 1; i++) {
+                        if (hrListEnd.get(i) * hrListEnd.get(i+1) < 0){
+                            passZeroHrNumList.add(i);
+                        }
+                    }
+                    //过0点心率的间隔
+                    List<Integer> passZeroIntervalNum = new ArrayList<>();
+                    for (int i = 0; i < passZeroHrNumList.size() - 1; i++) {
+                        passZeroIntervalNum.add(passZeroHrNumList.get(i + 1) - passZeroHrNumList.get(i));
+                    }
+                    int passZeroMin = CommonUtils.calculateMinValueInteger(passZeroIntervalNum);
+                    int passZeroMax = CommonUtils.calculateMaxValueInteger(passZeroIntervalNum);
+                    int sub = passZeroMax - passZeroMin;
+                    if (passZeroHrNumList.size() > 2 && passZeroMin > 105 && sub < 200){
+                        fclpList.add(new Integer[]{startHrIndex,startHrIndex + segmentNew0 - 1});
+                    }
+                    startHrIndex = hrList.size();
+                }else {
+                    startHrIndex = hrList.size();
                 }
             }
         }
         return fclpList;
-    }
-
-    private Integer findFclp(int startHrIndex,int type,List<RRData> rrList,List<Integer[]> fclpList){
-
-        List<RRData> rrListSub = new ArrayList<>();
-
-        List<Integer> passZeroHrNumList = new ArrayList<>();//穿过0心率时刻集合
-
-        if (type == 1){
-            rrListSub = rrList.subList(startHrIndex,(startHrIndex + segment1 - 1) > rrList.size() ? rrList.size() : (startHrIndex + segment1 - 1));
-        }else {
-            rrListSub = rrList.subList(startHrIndex,rrList.size());
-        }
-
-        //心率平滑滤波
-        List<RRData> smoothList = CommonUtils.smoothNew(rrListSub, 0, rrListSub.size() - 1, 100);
-        double smoothListMax = smoothList.stream().max(Comparator.comparing(RRData::getHr)).get().getHr();
-        double smoothListMin = smoothList.stream().min(Comparator.comparing(RRData::getHr)).get().getHr();
-        double smoothTemp = (smoothListMax + smoothListMin) / 2;
-        List<Double> smoothListTemp = new ArrayList<>();
-        for (int i = 0; i < smoothList.size(); i++) {
-            smoothListTemp.add(new BigDecimal(smoothList.get(i).getHr() - smoothTemp).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue());
-        }
-        for (int i = 0; i < smoothListTemp.size() - 1; i++) {
-            if (smoothListTemp.get(i) * smoothListTemp.get(i + 1) <= 0){
-                passZeroHrNumList.add(i);
-            }
-        }
-        List<Integer> passZeroIntervalNum = new ArrayList<>();//心率过0点的间隔数集合
-        for (int i = 0; i < passZeroHrNumList.size() - 1; i++) {
-            passZeroIntervalNum.add(rrList.get(startHrIndex+passZeroHrNumList.get(i+1) - 1).getSamplingNum() - rrList.get(startHrIndex+passZeroHrNumList.get(i) - 1).getSamplingNum());
-        }
-        //寻找fclp段
-        if (type == 1){
-            if (passZeroHrNumList.size() >= 2 && CommonUtils.calculateMinValueInteger(passZeroIntervalNum) > fclpIndex
-                    && (CommonUtils.calculateMaxValueInteger(passZeroIntervalNum) - CommonUtils.calculateMinValueInteger(passZeroIntervalNum)) < fclpIndex1
-                    && CommonUtils.calculateMaxValueInteger(passZeroIntervalNum) < fclpIndex2) {
-                fclpList.add(new Integer[]{startHrIndex,startHrIndex + segment1 - 1});
-                startHrIndex += segment1;//判断指针移动segment1个心率点
-            }else {
-                startHrIndex += segment0;
-            }
-        }else {
-            if (passZeroHrNumList.size() > 2 && CommonUtils.calculateMinValueInteger(passZeroIntervalNum) > fclpIndex
-                    && (CommonUtils.calculateMaxValueInteger(passZeroIntervalNum) - CommonUtils.calculateMinValueInteger(passZeroIntervalNum)) < fclpIndex1
-                    && CommonUtils.calculateMaxValueInteger(passZeroIntervalNum) < fclpIndex2){
-                fclpList.add(new Integer[]{startHrIndex,startHrIndex + segment0 - 1});
-            }
-            /*if (passZeroHrNumList.size() > 2 && (CommonUtils.calculateMaxValueInteger(passZeroIntervalNum) - CommonUtils.calculateMinValueInteger(passZeroIntervalNum)) < fclpIndex1
-                    && CommonUtils.calculateMaxValueInteger(passZeroIntervalNum) < fclpIndex2){
-                fclpList.add(new Integer[]{startHrIndex,startHrIndex + segment0 - 1});
-            }*/
-            startHrIndex = rrList.size();
-        }
-        return startHrIndex;
     }
 
     /**
@@ -864,119 +955,66 @@ public class AnalysisServiceImpl implements IAnalysisService {
         ecgHrDataList.get(0).setEcgDifferenceDataList(ecgDifferenceDataList);
 
         //寻找可用心电波段&计算RR间期和心率start
-        int segmentLength = 300;//心电波判断长度
-        int segmentStep = 50;//心电波判断的步进长度
+        int segmentLength = 500;//心电波判断长度
+        int segmentStep = 100;//心电波判断的步进长度
         int ecgStartIndex = 0;//起始心电波位置
 
         int good_bad_value = 1;//心电数据好坏判据初值
 
         int lastNumber = 0;//前段最后一个非0心率序号
-        while (ecgStartIndex < ecgList.size()){
+        while (ecgStartIndex < ecgList.size()) {
 
-            if ((ecgStartIndex + segmentLength - 1) < ecgList.size()){
+            if ((ecgStartIndex + segmentLength - 1) < ecgList.size()) {
 
                 //取sengment1个点的心电数据
-                List<Double> ecgHrDataListSub = ecgList.subList(ecgStartIndex,ecgStartIndex + segmentLength - 1);
-                //心电差分&心电减去均值
+                List<Double> ecgHrDataListSub = ecgList.subList(ecgStartIndex, ecgStartIndex + segmentLength - 1);
+                //心电差分数组
                 List<Double> ecgHrDataListSubDiff = new ArrayList<>();
-                double avg = ecgHrDataListSub.stream().mapToDouble(Double::valueOf).average().getAsDouble();//均值
-                List<Double> ecgHrSubAvgList = new ArrayList<>();//心电减均值数组
                 for (int i = 0; i < ecgHrDataListSub.size() - 1; i++) {
-                    double subTemp = ecgHrDataListSub.get(i + 1) - ecgHrDataListSub.get(i);
-                    ecgHrDataListSubDiff.add(subTemp > 0.0 ? subTemp : 0.0);
-                    double subAvgTemp = ecgHrDataListSub.get(i) - avg;
-                    ecgHrSubAvgList.add(subAvgTemp > 0.0 ? subAvgTemp : 0.0);
+                    ecgHrDataListSubDiff.add(ecgHrDataListSub.get(i + 1) - ecgHrDataListSub.get(i));
                 }
-                //计算确定心电R峰值下限阈值
-                double R_peack = this.calculationEcgRAndDiffPeak(ecgHrSubAvgList,segmentLength,segmentStep);
-                //计算确定心电差分峰值下限阈值
-                double DR_peack = this.calculationEcgRAndDiffPeak(ecgHrDataListSubDiff,segmentLength,segmentStep);
-                //心电R峰值&心电差分峰值最大值
-                double R_peakMax = ecgHrSubAvgList.stream().max(Comparator.comparing(Double::doubleValue)).get();
-                double DR_peakMax = ecgHrDataListSubDiff.stream().max(Comparator.comparing(Double::doubleValue)).get();
-                //峰值数组
-                if (R_peack == 0.0 || DR_peack == 0.0 || R_peakMax < 20.0 || DR_peakMax < 20.0){
-                    R_peack = 0.0;
-                    DR_peack = 0.0;
-                }
-                //如果获得完整的两个峰值下限值，则进行心电数据判读和心率计算
-                if (R_peack != 0.0 && DR_peack != 0.0){
-                    int minpeakdistance = 15;
-                    //找峰值
-                    List<PeakModel> ecgHrDataSubPeak = this.calPeakAndPosition(ecgHrDataListSub,R_peack,minpeakdistance);
-                    List<PeakModel> differenceEcgPeak = this.calPeakAndPosition(ecgHrDataListSubDiff,DR_peack,minpeakdistance);
-                    //峰值数目与差分峰值数目差值
-                    int isAvailable = Math.abs(ecgHrDataSubPeak.size() - differenceEcgPeak.size());
-                    //差分峰值间隔最大最小差
-                    int dissimilar = 0;
-                    double d_mean_rr = 0.0;
-                    if (ecgHrDataSubPeak.size() < (Math.ceil(segmentLength * 0.02 / 2) + 2) || differenceEcgPeak.size() < (Math.ceil(segmentLength * 0.02 / 2) + 2)){
-                        dissimilar = 5;
-                    }else {
-                        //峰值差分
-                        List<Integer> differenceEcgPeakDiff = new ArrayList<>();
-                        for (int i = 0; i < differenceEcgPeak.size() - 1; i++) {
-                            differenceEcgPeakDiff.add(differenceEcgPeak.get(i+1).getIndex() - differenceEcgPeak.get(i).getIndex());
-                        }
-                        Integer maxDiff = differenceEcgPeakDiff.stream().max(Comparator.comparing(Integer::intValue)).get();
-                        Integer minDiff = differenceEcgPeakDiff.stream().min(Comparator.comparing(Integer::intValue)).get();
-                        dissimilar = Math.abs(maxDiff - minDiff);
-
-                        List<Integer> ecgHrDataSubPeakDiff = new ArrayList<>();
-                        for (int i = 0; i < ecgHrDataSubPeak.size() - 1; i++) {
-                            ecgHrDataSubPeakDiff.add(ecgHrDataSubPeak.get(i+1).getIndex() - ecgHrDataSubPeak.get(i).getIndex());
-                        }
-                        double diffEcgAvg = ecgHrDataSubPeakDiff.stream().mapToDouble(Integer::doubleValue).summaryStatistics().getAverage();
-                        double ecgSubAvg = differenceEcgPeakDiff.stream().mapToDouble(Integer::doubleValue).summaryStatistics().getAverage();
-                        d_mean_rr = (ecgSubAvg - diffEcgAvg) / diffEcgAvg;
-                        //d_mean_rr = new BigDecimal(d_mean_rr).setScale(1,BigDecimal.ROUND_HALF_UP).doubleValue();
-                    }
-
-                    if (isAvailable <  good_bad_value && dissimilar < 5 && d_mean_rr < 0.1){
-                        double samplingInterval = 0.02d;
-
-                        for (int i = 0; i < differenceEcgPeak.size() - 1; i++) {
-                            RRData rrData = new RRData();
-                            rrData.setRRIntervalData((differenceEcgPeak.get(i + 1).getIndex() - differenceEcgPeak.get(i).getIndex()) * samplingInterval);
-                            rrData.setHr(60/rrData.getRRIntervalData());
-                            rrData.setSamplingNum(ecgStartIndex + differenceEcgPeak.get(i).getIndex());
-                            //剔除错误数据
-                            if (good_bad_value != 1){
-                                if (i == 0){
-                                    //前段最后1个心率数据比较
-                                    if (Math.abs(rrData.getHr() - RR_HRList.get(lastNumber).getHr()) > 10){
-                                        rrData.setRRIntervalData(RR_HRList.get(lastNumber).getRRIntervalData());
-                                        rrData.setHr(CommonUtils.mul(CommonUtils.division(1.0,rrData.getRRIntervalData()),60.0));
-                                    }
-                                }else if (Math.abs(rrData.getHr() - RR_HRList.get(RR_HRList.size()-1).getHr()) > 10){
+                //心电最大值
+                double ecgMax = CommonUtils.calculateMaxValue(ecgHrDataListSub);
+                //心电差分最大值
+                double ecgDiffMax = CommonUtils.calculateMaxValue(ecgHrDataListSubDiff);
+                //心电峰值
+                List<PeakModel> peakModelEcg = CommonUtils.findPeakListNew(ecgHrDataListSub, ecgMax * 0.7);
+                //心电差分峰值
+                List<PeakModel> peakModelEcgDiff = CommonUtils.findPeakListNew(ecgHrDataListSubDiff, ecgDiffMax * 0.38);
+                int godOrBad = Math.abs(peakModelEcg.size() - peakModelEcgDiff.size());
+                if (godOrBad < good_bad_value) {
+                    for (int i = 0; i < peakModelEcgDiff.size() - 1; i++) {
+                        RRData rrData = new RRData();
+                        rrData.setRRIntervalData((peakModelEcgDiff.get(i + 1).getIndex() - peakModelEcgDiff.get(i).getIndex()) * 0.02);
+                        rrData.setHr(60 / rrData.getRRIntervalData());
+                        rrData.setSamplingNum(ecgStartIndex + peakModelEcgDiff.get(i).getIndex() - 1);
+                        //剔除错误数据
+                        if (good_bad_value != 1) {
+                            if (i == 0) {
+                                //前段最后1个心率数据比较
+                                if (Math.abs(rrData.getHr() - RR_HRList.get(lastNumber).getHr()) > 10) {
+                                    rrData.setRRIntervalData(RR_HRList.get(lastNumber).getRRIntervalData());
+                                    rrData.setHr(CommonUtils.mul(CommonUtils.division(1.0, rrData.getRRIntervalData()), 60.0));
+                                }
+                            } else {
+                                if (Math.abs(rrData.getHr() - RR_HRList.get(RR_HRList.size() - 1).getHr()) > 10) {
                                     rrData.setRRIntervalData(RR_HRList.get(RR_HRList.size() - 1).getRRIntervalData());
-                                    if (rrData.getRRIntervalData() == 0.0){//防止前刻RR间期为0
-                                        rrData.setHr(0.0);
-                                    }else {
-                                        rrData.setHr(CommonUtils.mul(CommonUtils.division(1.0,rrData.getRRIntervalData()),60.0));
-                                    }
+                                    rrData.setHr(CommonUtils.mul(CommonUtils.division(1.0, rrData.getRRIntervalData()), 60.0));
                                 }
                             }
-                            RR_HRList.add(rrData);
-                            lastNumber = RR_HRList.size() - 1;
-                            good_bad_value = 4;//更改阈值（初始阈值是为了确保第1个心率值正确）
                         }
-                        //移动判断指标，继续判断
-                        ecgStartIndex += segmentLength;
-                    }else {//心电数据差，无法使用，无法计算RR间期和心率HR
-                        ecgStartIndex += segmentStep;
-                        RRData rrData = new RRData();
-                        rrData.setRRIntervalData(0.0);
-                        rrData.setHr(0.0);
-                        rrData.setSamplingNum(ecgStartIndex-1);
                         RR_HRList.add(rrData);
+                        lastNumber = RR_HRList.size() - 1;
+                        good_bad_value = 3;//更改阈值（初始阈值是为了确保第1个心率值正确）
                     }
-                }else {//如果不能获得两个完整的峰值下限判断值，则该段心电数据无法使用
+                    //移动判断指标，继续判断
+                    ecgStartIndex += segmentLength;
+                } else {
                     ecgStartIndex += segmentStep;
                     RRData rrData = new RRData();
                     rrData.setRRIntervalData(0.0);
                     rrData.setHr(0.0);
-                    rrData.setSamplingNum(ecgStartIndex-1);
+                    rrData.setSamplingNum(ecgStartIndex - 1);
                     RR_HRList.add(rrData);
                 }
             }else {
@@ -1004,6 +1042,13 @@ public class AnalysisServiceImpl implements IAnalysisService {
         return RR_HRList;
     }
 
+    /**
+     * 计算心电峰值最低限值-（暂时保留）
+     * @param ecgHrSubAvgList
+     * @param segmentLength
+     * @param segmentStep
+     * @return
+     */
     private double calculationEcgRAndDiffPeak(List<Double> ecgHrSubAvgList,int segmentLength,int segmentStep) {
         List<PeakModel> peakModelList = CommonUtils.findPeakList(ecgHrSubAvgList);//找出心电的所有峰值和峰值位置
         //按心电峰值排序
@@ -1029,7 +1074,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
             }
         }
         //心电峰值最低限值
-        double R_peack = new BigDecimal(peakModelListSort.get(peakModel.getIndex()+1).getPeakValue() - 1.0).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue();
+        double R_peack = new BigDecimal(peakModelListSort.get(peakModel.getIndex() + 1).getPeakValue() - 1.0).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue();
         return R_peack;
     }
 
@@ -1073,64 +1118,5 @@ public class AnalysisServiceImpl implements IAnalysisService {
 
         return ecgHrDataList;
     }
-
-    /**
-     * 计算波峰及位置
-     * @param ecgList
-     * @param minpeakheight
-     * @param minpeakdistance
-     * @return
-     */
-    private List<PeakModel> calPeakAndPosition(List<Double> ecgList,double minpeakheight,int minpeakdistance){
-
-        if (CollectionUtil.isEmpty(ecgList)){
-            throw new IllegalArgumentException("Number array must not empty !");
-        }else {
-            int flag = 0;
-            List<PeakModel> peakList = new ArrayList<>();
-            for (int i = 0; i < ecgList.size() - 1;) {//只记录波峰及位置
-                if (ecgList.get(i + 1).compareTo(ecgList.get(i)) > 0){
-                    flag = 2;
-                }else if (ecgList.get(i + 1).compareTo(ecgList.get(i)) < 0){
-                    if (flag == 2){
-                        if (ecgList.get(i).compareTo(minpeakheight) >= 0){
-                            PeakModel peakModel = new PeakModel();
-                            peakModel.setIndex(i);
-                            peakModel.setPeakValue(ecgList.get(i));
-                            peakList.add(peakModel);
-                            i += minpeakdistance;
-                            continue;
-                        }
-                    }
-                    flag = 1;
-                }
-                i++;
-            }
-            return peakList;
-        }
-    }
-    /*private List<Double[]> calPeakAndPosition(List<Double> ecgList, double max, double ratio) {
-        if (CollectionUtil.isEmpty(ecgList)){
-            throw new IllegalArgumentException("Number array must not empty !");
-        }else {
-            //峰值最小高度
-            double multiplyValue1 = new BigDecimal(max * ratio).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue();
-            int flag = 0;
-            List<Double[]> peakList = new ArrayList<>();
-            for (int i = 1; i < ecgList.size(); i++) {//只记录波峰及位置
-                if (ecgList.get(i).compareTo(ecgList.get(i-1)) > 0){
-                    flag = 2;
-                }else if (ecgList.get(i).compareTo(ecgList.get(i-1)) < 0){
-                    if (flag == 2){
-                        if (ecgList.get(i-1).compareTo(multiplyValue1) >= 0){//以峰值高度为最大值的0.7倍为基准，寻找峰值及其位置
-                            peakList.add(new Double[]{Double.valueOf(i-1),ecgList.get(i-1)});
-                        }
-                    }
-                    flag = 1;
-                }
-            }
-            return peakList;
-        }
-    }*/
 
 }

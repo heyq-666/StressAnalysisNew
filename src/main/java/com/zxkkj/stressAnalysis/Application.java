@@ -26,8 +26,8 @@ public class Application {
 
         try {
             //模拟入参方法，测试用
-            int type = 1;
-            args = simulationParam(args,type);
+            /*int type = 1;
+            args = simulationParam(args,type);*/
 
             ExecuteResult executeResult = new ExecuteResult();
 
@@ -57,7 +57,7 @@ public class Application {
             //自动计算
             args = new String[3];
             args[0] = "1";
-            args[1] = "C:\\Users\\Heyq\\Desktop\\streeTest\\test3new";
+            args[1] = "C:\\Users\\Heyq\\Desktop\\streeTest\\test";
             args[2] = "C:\\Users\\Heyq\\Desktop\\streeTest\\";
         }else if (type == 2){
             //手动选取
