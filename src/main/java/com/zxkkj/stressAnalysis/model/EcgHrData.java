@@ -2,7 +2,7 @@ package com.zxkkj.stressAnalysis.model;
 
 import lombok.*;
 
-import java.util.Date;
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -22,12 +22,17 @@ public class EcgHrData {
     /**
      * 心电波形数据文件日期
      */
-    private Date ecgDataTime;
+    private LocalDateTime ecgDataTime;
+
+    /**
+     * 心电波形索引
+     */
+    private List<Integer> frameNumbers;
 
     /**
      * 心电波形数据
      */
-    private List<Integer> ecgList;
+    private List<Double> ecgList;
 
     /**
      * 心电差分波

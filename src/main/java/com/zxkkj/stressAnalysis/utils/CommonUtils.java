@@ -278,4 +278,76 @@ public class CommonUtils {
             return peakList;
         }
     }
+
+    /**
+     * 计算数组绝对值的最大值
+     * @param array
+     * @return
+     */
+    public static double findMaxAbsolute(double[] array) {
+        double max = 0;
+        for (double value : array) {
+            double absValue = Math.abs(value);
+            if (absValue > max) {
+                max = absValue;
+            }
+        }
+        return max;
+    }
+
+    /**
+     * 找到第一个达到最大值的索引
+     * @param array
+     * @param maxValue
+     * @return
+     */
+    public static int findFirstMaxIndex(double[] array, double maxValue) {
+        for (int i = 0; i < array.length; i++) {
+            if (Math.abs(array[i]) >= maxValue) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * 在指定范围内查找最大绝对值
+     * @param array
+     * @param start
+     * @param end
+     * @return
+     */
+    public static double findMaxInRange(double[] array, int start, int end) {
+        double max = 0;
+        int low = Math.max(0, Math.min(start, end));
+        int high = Math.min(array.length - 1, Math.max(start, end));
+
+        for (int i = low; i <= high; i++) {
+            double absValue = Math.abs(array[i]);
+            if (absValue > max) {
+                max = absValue;
+            }
+        }
+        return max;
+    }
+
+    /**
+     * 计算数组均值（忽略零值）
+     * @param array
+     * @return
+     */
+    public static double computeArrayMean(double[] array) {
+        double sum = 0;
+        int count = 0;
+
+        for (double value : array) {
+            // 忽略被置零的点
+            if (value != 0) {
+                sum += value;
+                count++;
+            }
+        }
+
+        return count > 0 ? sum / count : 0;
+    }
 }

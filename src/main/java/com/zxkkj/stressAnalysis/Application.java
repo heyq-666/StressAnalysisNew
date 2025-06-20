@@ -1,8 +1,8 @@
 package com.zxkkj.stressAnalysis;
-import cn.hutool.core.io.FileUtil;
 import com.alibaba.fastjson.JSONObject;
 import com.zxkkj.stressAnalysis.constants.Constants;
 import com.zxkkj.stressAnalysis.model.AnalysisReult;
+import com.zxkkj.stressAnalysis.model.EcgHrData;
 import com.zxkkj.stressAnalysis.model.ExecuteResult;
 import com.zxkkj.stressAnalysis.service.IAnalysisService;
 import com.zxkkj.stressAnalysis.service.impl.AnalysisServiceImpl;
@@ -10,8 +10,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.math.BigDecimal;
-import java.text.ParseException;
-import java.util.*;
 
 /**
  * 应用程序
@@ -22,18 +20,24 @@ public class Application {
 
     private static Logger logger = LoggerFactory.getLogger(Application.class);
 
-    public static void main(String[] args) throws ParseException {
-
+    public static void main(String[] args) {
+        //模拟入参方法，调试用
+        //args = simulationParam(args,1);
         try {
-            //模拟入参方法，测试用
-            /*int type = 1;
-            args = simulationParam(args,type);*/
+            if (args.length == 0) {
+                logger.error("请提供.dat数据文件夹路径作为参数");
+                return;
+            }
 
             ExecuteResult executeResult = new ExecuteResult();
 
             if (args[0].equals(Constants.fclpType.automatic.getValue())){
 
-                executeResult = startAnalysis(args[1],args[2]);
+                File[] files = paramVerify(args);
+
+                if (files != null && files.length > 0){
+                    executeResult = startAnalysis(files,args[2]);
+                }
 
             }else if (args[0].equals(Constants.fclpType.manual.getValue())){
 
@@ -51,14 +55,29 @@ public class Application {
 
     }
 
+    private static File[] paramVerify(String[] args) {
+        String folderPath = args[1];
+        File folder = new File(folderPath);
+        if (!folder.exists() || !folder.isDirectory()) {
+            logger.error("指定的路径不存在或不是一个文件夹:{}",folderPath);
+            return null;
+        }
+        File[] files = folder.listFiles((dir, name) -> name.toLowerCase().endsWith(".dat"));
+        if (files == null || files.length == 0) {
+            logger.error("文件夹中没有找到任何.dat文件:{}",folderPath);
+            return null;
+        }
+        return files;
+    }
+
     private static String[] simulationParam(String[] args,int type) {
 
         if (type == 1){
             //自动计算
             args = new String[3];
             args[0] = "1";
-            args[1] = "C:\\Users\\Heyq\\Desktop\\streeTest\\test";
-            args[2] = "C:\\Users\\Heyq\\Desktop\\streeTest\\";
+            args[1] = "/Users/heyuqi/Desktop/stress/测试数据/腰带原始数据/";
+            args[2] = "/Users/heyuqi/Desktop/stress/stressOut/";
         }else if (type == 2){
             //手动选取
             args = new String[5];
@@ -80,33 +99,39 @@ public class Application {
 
     /**
      * 数据分析-基于整个腰带数据进行分析
-     * @param fileDir
+     * @param files
+     * @param outTxtPath
      * @return
      * @throws IOException
      */
-    public static ExecuteResult startAnalysis(String fileDir,String outTxtPath) throws IOException {
-
-        if (!FileUtil.exist(fileDir)) {
-            logger.error("filePath: %s is not exist", fileDir);
-            return new ExecuteResult();
-        }
+    public static ExecuteResult startAnalysis(File[] files,String outTxtPath) throws IOException {
         //执行结果: 成功多少 失败多少
         ExecuteResult executeResult = new ExecuteResult();
-        List<File> fileList = FileUtil.loopFiles(fileDir);
+        int successCount = 0;
+        int failureCount = 0;
+        IAnalysisService analysisService = new AnalysisServiceImpl();
+        for (File file : files){
+            String fileName = file.getName();
+            String filePath = file.getAbsolutePath();
+            logger.info("file:{} begin analysis:{}", fileName);
+            try {
+                EcgHrData content = analysisService.loadDataByLocalFile(fileName,filePath);
 
-        for (File file : fileList){
+                AnalysisReult analysisResult = analysisService.executeAnalysis(content,file);
 
-            logger.info("file: %s begin analysis", file.getName());
+                analysisService.outAnalysisResult(analysisResult,outTxtPath,file);
 
-            IAnalysisService analysisService = new AnalysisServiceImpl();
+                logger.info("file: {} analysis success", fileName);
 
-            List<Integer> content = analysisService.loadDataByLoaclFile(file);
+                successCount++;
+            }catch (Exception e) {
+                failureCount++;
 
-            AnalysisReult analysisResult = analysisService.executeAnalysis(content,file);
-
-            analysisService.outAnalysisResult(analysisResult,outTxtPath,file);
-
+                logger.error("file: {} analysis failure - 原因: {}" ,fileName, e.getMessage());
+            }
         }
+        executeResult.setSuccessCount(successCount);
+        executeResult.setFailCount(failureCount);
         return executeResult;
     }
 

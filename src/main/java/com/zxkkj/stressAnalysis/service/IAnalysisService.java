@@ -1,6 +1,8 @@
 package com.zxkkj.stressAnalysis.service;
 
 import com.zxkkj.stressAnalysis.model.AnalysisReult;
+import com.zxkkj.stressAnalysis.model.EcgHrData;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
@@ -12,18 +14,19 @@ public interface IAnalysisService {
 
     /**
      * 读取数据
-     * @param file
+     * @param fileName
+     * @param filePath
      * @return
      * @throws IOException
      */
-    List<Integer> loadDataByLoaclFile(File file) throws IOException;
+    EcgHrData loadDataByLocalFile(String fileName, String filePath) throws IOException;
 
     /**
      * 基于整条腰带的数据进行数据分析
-     * @param list
+     * @param content
      * @return
      */
-    AnalysisReult executeAnalysis(List<Integer> list, File file);
+    AnalysisReult executeAnalysis(EcgHrData content, File file);
 
     /**
      * 基于手动选取的fclp心率数据进行数据分析

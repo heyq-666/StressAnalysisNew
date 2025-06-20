@@ -1,9 +1,6 @@
 package com.zxkkj.stressAnalysis.model;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -30,7 +27,7 @@ public class AnalysisReult implements Serializable {
     /**
      * 心电波
      */
-    List<Integer> ecgList = new ArrayList<>();
+    List<Double> ecgList = new ArrayList<>();
 
     /**
      * 心率波

@@ -1,76 +1,138 @@
 package com.zxkkj.stressAnalysis.service.impl;
 
-import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.collection.CollectionUtil;
 import cn.hutool.core.text.csv.CsvWriter;
 import com.zxkkj.stressAnalysis.constants.Constants;
 import com.zxkkj.stressAnalysis.model.*;
+import com.zxkkj.stressAnalysis.service.FCLPDetector;
 import com.zxkkj.stressAnalysis.service.IAnalysisService;
 import com.zxkkj.stressAnalysis.utils.CommonUtils;
+import com.zxkkj.stressAnalysis.utils.ExcelWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 public class AnalysisServiceImpl implements IAnalysisService {
 
     private Logger logger = LoggerFactory.getLogger(getClass());
-
     //头标志字节
     private final int headByte1 = 85;
     private final int headByte2 = 170;
     //判断fclp所用指标
-    private final double fclpIndex = (1.1 * 60) / 0.02;
-    private final double fclpIndex1 = (1.3 * 60) / 0.02;
-    private final double fclpIndex2 = (4.5 * 60) / 0.02;
+    private static final byte[] FRAME_HEADER = {85, (byte) 170}; // 0x55, 0xAA
+    private static final byte[] FRAME_TRAILER = {(byte) 170, 85}; // 0xAA, 0x55
+    private static final int FRAME_LENGTH = 279;
+    private static final int ECG_PER_FRAME = 100;
+    private static final int HEADER_LENGTH = 2;
+    private static final int SEQ_OFFSET = 2;
+    private static final int SEQ_LENGTH = 4;
+    private static final int ECG_OFFSET = 13;
+
+    // 正常ECG判定的时间范围（根据采样率调整）
+    private static final int LENGTH_NORMAL = 500;
+    // 脉冲检测阈值
+    private static final double PULSE_THRESHOLD = 200;
 
     @Override
-    public List<Integer> loadDataByLoaclFile(File file) throws IOException {
+    public EcgHrData loadDataByLocalFile(String fileName,String filePath) throws IOException {
+        // 使用内存映射文件提高大文件读取性能
+        try (FileChannel channel = FileChannel.open(Paths.get(filePath), StandardOpenOption.READ)) {
+            long fileSize = channel.size();
+            ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, fileSize);
 
-        BufferedInputStream in = null;
-        ByteArrayOutputStream out = null;
-        byte[] content = null;
-        List<Integer> list = new ArrayList();
-        try {
-            long before = System.currentTimeMillis();
-            in = new BufferedInputStream(new FileInputStream(file));
-            out = new ByteArrayOutputStream(1024);
-            byte[] temp = new byte[1024];
-            int size = 0;
-            while((size = in.read(temp)) != -1){
-                out.write(temp, 0, size);
+            // 查找第一个帧头位置
+            int firstHeaderPos = findFirstHeader(buffer);
+            if (firstHeaderPos == -1) {
+                throw new RuntimeException("未找到数据帧头");
             }
-            content = out.toByteArray();
-            //byte数组转为int存入list
-            for (int i = 0; i < content.length; i++) {
-                list.add(content[i] & 0xFF);
-            }
-            long after = System.currentTimeMillis();
-            logger.info("读取并转换数据的耗时："+(after - before));
-        }catch (IOException e){
-            e.printStackTrace();
-        }finally {
-            in.close();
+
+            return parseECGData(fileName,buffer,firstHeaderPos);
         }
-        return list;
+    }
+
+    private static EcgHrData parseECGData(String fileName,ByteBuffer buffer, int startPos) {
+        List<Integer> frameNumbers = new ArrayList<>();
+        List<Double> ecgData = new ArrayList<>();
+
+        int position = startPos;
+        int bufferLimit = buffer.limit();
+        int frameCount = 0;
+
+        // 预计算结束位置
+        int maxPosition = bufferLimit - FRAME_LENGTH;
+
+        while (position <= maxPosition) {
+            // 检查帧头
+            if (buffer.get(position) == FRAME_HEADER[0] &&
+                    buffer.get(position + 1) == FRAME_HEADER[1]) {
+
+                // 检查帧尾
+                int trailerPos = position + FRAME_LENGTH - 2;
+                if (trailerPos + 1 < bufferLimit &&
+                        buffer.get(trailerPos) == FRAME_TRAILER[0] &&
+                        buffer.get(trailerPos + 1) == FRAME_TRAILER[1]) {
+
+                    // 解析帧序号 (大端序)
+                    int frameNum = 0;
+                    for (int i = 0; i < SEQ_LENGTH; i++) {
+                        frameNum = (frameNum << 8) | (buffer.get(position + SEQ_OFFSET + i) & 0xFF);
+                    }
+                    frameNumbers.add(frameNum);
+
+                    // 批量解析ECG数据
+                    int ecgStart = position + ECG_OFFSET;
+                    for (int i = 0; i < ECG_PER_FRAME; i++) {
+                        int pos = ecgStart + i * 2;
+                        double ecgValue = ((buffer.get(pos) & 0xFF) << 8) | (buffer.get(pos + 1) & 0xFF);
+                        ecgData.add(ecgValue);
+                    }
+
+                    // 移动到下一帧
+                    position += FRAME_LENGTH;
+                    frameCount++;
+                    continue; // 跳过位置递增
+                }
+            }
+            position++; // 未找到有效帧，前进1字节
+        }
+
+        return new EcgHrData(fileName, LocalDateTime.now(),frameNumbers, ecgData,null);
+    }
+
+    private static int findFirstHeader(ByteBuffer buffer) {
+        int limit = buffer.limit() - FRAME_HEADER.length;
+        for (int i = 0; i <= limit; i++) {
+            if (buffer.get(i) == FRAME_HEADER[0] && buffer.get(i + 1) == FRAME_HEADER[1]) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     @Override
-    public AnalysisReult executeAnalysis(List<Integer> contentList,File file) {
+    public AnalysisReult executeAnalysis(EcgHrData content,File file) {
 
         //结果输出
         AnalysisReult analysisReult = new AnalysisReult();
 
         //提取心电波形数据
-        List<EcgHrData> ecgHrDataList = this.getEcgWaveData(contentList,file);
+        EcgHrData ecgHrData = this.processECGSignal(file,content);
+
         //存储心电波
-        analysisReult.setEcgList(ecgHrDataList.get(0).getEcgList());
+        analysisReult.setEcgList(ecgHrData.getEcgList());
 
         //计算RR间期和心率
-        List<RRData> RRList = this.calculationRRAndHr(ecgHrDataList);
+        List<RRData> RRList = this.calculationRRAndHr(ecgHrData);
         List<Double> RRDataList = RRList.stream().map(RRData::getRRIntervalData).collect(Collectors.toList());
         analysisReult.setRRList(RRDataList);
 
@@ -79,7 +141,9 @@ public class AnalysisServiceImpl implements IAnalysisService {
         analysisReult.setHrList(hrList);
 
         //FCLP段识别
-        List<Integer[]> fclpList = this.FCLPIdentity(RRList);
+        List<Integer[]> fclpList = this.fclpIdentity(RRList);
+        /*FCLPDetector fclpDetector = new FCLPDetector();
+        List<Integer[]> fclpList1 = fclpDetector.detectFCLPSegments(RRList);*/
         analysisReult.setFclpList(fclpList);
 
         //FCLP段应激强度计算
@@ -92,6 +156,135 @@ public class AnalysisServiceImpl implements IAnalysisService {
         this.calculationNoFclpHrv(fclpList,stressList,RRList,analysisReult);
 
         return analysisReult;
+    }
+
+    public EcgHrData processECGSignal(File file,EcgHrData parseResult) {
+        // 获取原始ECG数据
+        List<Double> ecgList = parseResult.getEcgList();
+
+        // 1. 均值滤波
+        double[] meanFilteredArray = computeMeanFilter(ecgList);
+
+        // 2. 脉冲干扰检测与处理
+        double[] processedArray = processPulseInterference(meanFilteredArray);
+
+        // 3. 信号方向调整
+        adjustSignalDirection(processedArray);
+
+        List<Double> processedList = new ArrayList<>(processedArray.length);
+        for (double value : processedArray) {
+            processedList.add(value);
+        }
+        //输出心电波数据-用于调试
+        outEcgData(file,processedList);
+        return new EcgHrData(parseResult.getEcgFileName(),parseResult.getEcgDataTime(),parseResult.getFrameNumbers(),processedList,null);
+    }
+
+    private static void outEcgData(File file,List<Double> processedList) {
+        ExcelWriter.writeDoublesToExcelColumn(processedList, "/Users/heyuqi/Desktop/stress/stressOut/"+file.getName() + ".xlsx");
+    }
+
+    // 内部实现使用数组 - 调整信号方向
+    private static void adjustSignalDirection(double[] signal) {
+        double maxPositive = Double.NEGATIVE_INFINITY;
+        double minNegative = Double.POSITIVE_INFINITY;
+
+        // 查找最大值和最小值
+        for (double value : signal) {
+            if (value > maxPositive) maxPositive = value;
+            if (value < minNegative) minNegative = value;
+        }
+
+        // 如果最大正值小于最小负值的绝对值，则反转信号
+        if (maxPositive < Math.abs(minNegative)) {
+            for (int i = 0; i < signal.length; i++) {
+                signal[i] = -signal[i];
+            }
+        }
+    }
+
+    private double[] processPulseInterference(double[] ecgSignal) {
+        // 创建副本，避免修改原始数据
+        double[] processed = Arrays.copyOf(ecgSignal, ecgSignal.length);
+
+        // 初始计算最大值和正常ECG判定值
+        double ecgMax = CommonUtils.findMaxAbsolute(processed);
+        int maxIndex = CommonUtils.findFirstMaxIndex(processed, ecgMax);
+        double normalECG = this.calculateNormalECG(processed, maxIndex);
+
+        // 检查是否需要处理脉冲干扰
+        if (ecgMax < normalECG || ecgMax <= PULSE_THRESHOLD) {
+            System.out.println("无脉冲干扰");
+            return processed;
+        }
+
+        // 脉冲干扰检测与剔除循环
+        while (ecgMax >= 2 * normalECG || ecgMax > PULSE_THRESHOLD) {
+            // 剔除脉冲干扰点（置零）
+            for (int i = 0; i < processed.length; i++) {
+                if (Math.abs(processed[i]) >= ecgMax) {
+                    processed[i] = 0;
+                }
+            }
+
+            // 重新计算均值并平移
+            double newMean = CommonUtils.computeArrayMean(processed);
+            for (int i = 0; i < processed.length; i++) {
+                processed[i] -= newMean;
+            }
+
+            // 更新最大值和正常ECG判定值
+            ecgMax = CommonUtils.findMaxAbsolute(processed);
+            maxIndex = CommonUtils.findFirstMaxIndex(processed, ecgMax);
+            normalECG = calculateNormalECG(processed, maxIndex);
+        }
+
+        return processed;
+    }
+
+    /**
+     * 计算正常ECG判定值
+     * @param signal
+     * @param maxIndex
+     * @return
+     */
+    private static double calculateNormalECG(double[] signal, int maxIndex) {
+        double normalECG;
+
+        if (maxIndex + LENGTH_NORMAL < signal.length) {
+            // 取后续时间范围内的局部最大值
+            normalECG = CommonUtils.findMaxInRange(signal, maxIndex + 1, maxIndex + LENGTH_NORMAL);
+        } else if (maxIndex - LENGTH_NORMAL >= 0) {
+            // 取前面时间范围内的局部最大值
+            normalECG = CommonUtils.findMaxInRange(signal, maxIndex - LENGTH_NORMAL, maxIndex - 1);
+        } else {
+            // 没有足够数据，使用整个信号的最大值
+            normalECG = CommonUtils.findMaxAbsolute(signal);
+        }
+        return normalECG;
+    }
+
+    private static double[] computeMeanFilter(List<Double> ecgList) {
+        if (ecgList == null || ecgList.isEmpty()) {
+            return new double[0];
+        }
+        // 转换为数组提高性能
+        double[] ecgArray = ecgList.stream().mapToDouble(i -> i).toArray();
+        // 计算总和
+        long sum = 0;
+        for (double value : ecgArray) {
+            sum += value;
+        }
+        // 计算平均值
+        final double mean = (double) sum / ecgArray.length;
+
+        // 减去平均值
+        double[] filtered = new double[ecgArray.length];
+        for (int i = 0; i < ecgArray.length; i++) {
+            filtered[i] = ecgArray[i] - mean;
+        }
+
+        return filtered;
     }
 
     /**
@@ -393,50 +586,50 @@ public class AnalysisServiceImpl implements IAnalysisService {
         }
         return analysisReult;
     }
-
     /**
      * 计算每秒心率集合
      * @param rrList
      * @return
      */
     private List<Double> getHrList(List<RRData> rrList) {
-
-        //复制list
+        // 复制list并进行时间取整
         List<RRData> rrListNew = rrList.stream().map(e -> {
-            RRData rrData = new RRData();
-            BeanUtil.copyProperties(e,rrData);
-            return rrData;
-        }).collect(Collectors.toList());
-        //心率对应时间取整
-        rrListNew.forEach(rrData -> rrData.setSamplingNum(new Double(rrData.getSamplingNum() * 0.02).intValue()));
-        //根据取整后的时间取整
-        List<RRData> newList = rrListNew.stream().collect(
-                Collectors.collectingAndThen(
-                        Collectors.toCollection(() -> new TreeSet<>(Comparator.comparing(RRData::getSamplingNum))), ArrayList::new)
-        );
-        //缺失时间段（秒）的心率插值(前后平均值)
+                    RRData newData = new RRData(e.getRRIntervalData(), e.getHr(), e.getSamplingNum());
+                    newData.setSamplingNum((int)(e.getSamplingNum() * 0.02));
+                    return newData;
+                }).collect(Collectors.toList());
+
+        // 根据取整后的时间去重
+        List<RRData> newList = rrListNew.stream()
+                .collect(Collectors.collectingAndThen(
+                        Collectors.toCollection(() -> new TreeSet<>(Comparator.comparing(RRData::getSamplingNum))),
+                        ArrayList::new));
+
+        // 缺失时间段的心率插值(前后平均值)
         List<RRData> endList = new ArrayList<>();
         for (int i = 0; i < newList.size() - 1; i++) {
-            if (newList.get(i + 1).getSamplingNum() - newList.get(i).getSamplingNum() > 1){
-                for (int j = 0; j < (newList.get(i + 1).getSamplingNum() - newList.get(i).getSamplingNum()); j++) {
-                    RRData rrData = new RRData();
-                    rrData.setSamplingNum(newList.get(i).getSamplingNum() + j);
-                    rrData.setHr((newList.get(i).getHr() + newList.get(i + 1).getHr()) / 2);
-                    endList.add(rrData);
+            RRData current = newList.get(i);
+            RRData next = newList.get(i + 1);
+            int timeDiff = next.getSamplingNum() - current.getSamplingNum();
+            // 添加当前数据点
+            endList.add(new RRData(current.getRRIntervalData(), current.getHr(), current.getSamplingNum()));
+            // 插值处理
+            if (timeDiff > 1) {
+                double avgHr = (current.getHr() + next.getHr()) / 2;
+                for (int j = 1; j < timeDiff; j++) {
+                    endList.add(new RRData(0.0, avgHr, current.getSamplingNum() + j));
                 }
-            }else {
-                RRData rrData = new RRData();
-                rrData.setSamplingNum(newList.get(i).getSamplingNum());
-                rrData.setHr(newList.get(i).getHr());
-                endList.add(rrData);
             }
         }
-        //输出心率数组，以产生心率的时间为第一时间
-        List<Double> hrList = new ArrayList<>();
-        for (int i = 0; i < endList.size(); i++) {
-            hrList.add(CommonUtils.keepTwoDecimal(endList.get(i).getHr()));
+        // 添加最后一个数据点
+        if (!newList.isEmpty()) {
+            RRData last = newList.get(newList.size() - 1);
+            endList.add(new RRData(last.getRRIntervalData(), last.getHr(), last.getSamplingNum()));
         }
-        return hrList;
+
+        // 输出心率数组，保留两位小数
+        return endList.stream().map(RRData::getHr).map(CommonUtils::keepTwoDecimal).collect(Collectors.toList());
+
     }
 
     @Override
@@ -501,18 +694,9 @@ public class AnalysisServiceImpl implements IAnalysisService {
                 fw.write(analysisReult.getHrvList().get(0).getLFAndHFRatio() + "" + " ");
 
                 //由于非fclp，只有一组HRV指标，所以第二组时域频域指标全置为"-"
-                fw.write("-" + " ");
-                fw.write("-" + " ");
-                fw.write("-" + " ");
-                fw.write("-" + " ");
-                fw.write("-" + " ");
-                fw.write("-" + " ");
-
-                fw.write("-" + " ");
-                fw.write("-" + " ");
-                fw.write("-" + " ");
-                fw.write("-" + " ");
-                fw.write("-" + " ");
+                for (int i = 0; i < 11; i++) {
+                    fw.write("- ");
+                }
             }
             //将腰带源数据提取的心电心率输出至指定位置
             this.outECGAndHrListToCsv(analysisReult,outTxtPath);
@@ -545,7 +729,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
             fileOutputStream.write(0xef);
             fileOutputStream.write(0xbb);
             fileOutputStream.write(0xbf);
-            List<Integer> ecgList = analysisReult.getEcgList();
+            List<Double> ecgList = analysisReult.getEcgList();
             writer = new CsvWriter(new OutputStreamWriter(fileOutputStream, StandardCharsets.UTF_8.name()));
             writer.write(ecgList);
             //心率波输出
@@ -857,7 +1041,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
      * FCLP段识别
      * @param hrList
      */
-    private List<Integer[]> FCLPIdentity(List<RRData> hrList) {
+    private List<Integer[]> fclpIdentity(List<RRData> hrList) {
 
         //各fclp段数据
         List<Integer[]> fclpList = new ArrayList<>();
@@ -932,19 +1116,17 @@ public class AnalysisServiceImpl implements IAnalysisService {
 
     /**
      * 计算RR间期和心率
-     * @param ecgHrDataList
+     * @param ecgHrData
      */
-    private List<RRData> calculationRRAndHr(List<EcgHrData> ecgHrDataList) {
+    private List<RRData> calculationRRAndHr(EcgHrData ecgHrData) {
 
         //提取一个腰带的心电数据
-        List<Integer> ecgHrTempList = ecgHrDataList.get(0).getEcgList();
+        List<Double> ecgHrTempList = ecgHrData.getEcgList();
 
         //心电差分波
         List<Double> ecgDifferenceDataList = new ArrayList<>();
 
-        List<Double> ecgList = new ArrayList<>();
-        //心电数据类型转换
-        ecgList = ecgHrTempList.stream().map(Integer::doubleValue).collect(Collectors.toList());
+        List<Double> ecgList = ecgHrTempList;
 
         List<RRData> RR_HRList = new ArrayList();
 
@@ -952,7 +1134,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
             ecgDifferenceDataList.add(CommonUtils.sub(ecgList.get(j),ecgList.get(j - 1)));
         }
         //存储心电差分波数据
-        ecgHrDataList.get(0).setEcgDifferenceDataList(ecgDifferenceDataList);
+        ecgHrData.setEcgDifferenceDataList(ecgDifferenceDataList);
 
         //寻找可用心电波段&计算RR间期和心率start
         int segmentLength = 500;//心电波判断长度
@@ -978,14 +1160,14 @@ public class AnalysisServiceImpl implements IAnalysisService {
                 //心电差分最大值
                 double ecgDiffMax = CommonUtils.calculateMaxValue(ecgHrDataListSubDiff);
                 //心电峰值
-                List<PeakModel> peakModelEcg = CommonUtils.findPeakListNew(ecgHrDataListSub, ecgMax * 0.7);
+                List<PeakModel> peakModelEcg = CommonUtils.findPeakListNew(ecgHrDataListSub, ecgMax * 0.6);
                 //心电差分峰值
                 List<PeakModel> peakModelEcgDiff = CommonUtils.findPeakListNew(ecgHrDataListSubDiff, ecgDiffMax * 0.38);
                 int godOrBad = Math.abs(peakModelEcg.size() - peakModelEcgDiff.size());
                 if (godOrBad < good_bad_value) {
                     for (int i = 0; i < peakModelEcgDiff.size() - 1; i++) {
                         RRData rrData = new RRData();
-                        rrData.setRRIntervalData((peakModelEcgDiff.get(i + 1).getIndex() - peakModelEcgDiff.get(i).getIndex()) * 0.02);
+                        rrData.setRRIntervalData((peakModelEcgDiff.get(i + 1).getIndex() - peakModelEcgDiff.get(i).getIndex()) * 0.01);
                         rrData.setHr(60 / rrData.getRRIntervalData());
                         rrData.setSamplingNum(ecgStartIndex + peakModelEcgDiff.get(i).getIndex() - 1);
                         //剔除错误数据
@@ -1021,8 +1203,9 @@ public class AnalysisServiceImpl implements IAnalysisService {
                 ecgStartIndex = ecgList.size();
             }
         }
-        //0心率处理
-        List<Integer> indList = new ArrayList<>();//非0心率位置集合
+        //修正高心率插补0心率
+        return this.correctHighHeartAndZeroHeart(RR_HRList);
+        /*List<Integer> indList = new ArrayList<>();//非0心率位置集合
         for (int i = 0; i < RR_HRList.size(); i++) {
             if (RR_HRList.get(i).getHr() != 0.0){
                 indList.add(i);
@@ -1039,7 +1222,55 @@ public class AnalysisServiceImpl implements IAnalysisService {
                 RR_HRList = RR_HRList.subList(indList.get(0),RR_HRList.size());
             }
         }
-        return RR_HRList;
+        return RR_HRList;*/
+    }
+
+    private List<RRData> correctHighHeartAndZeroHeart(List<RRData> rrHrList) {
+        // 1. 查找所有非零心率的位置索引
+        List<Integer> nonZeroIndices = IntStream.range(0, rrHrList.size())
+                .filter(i -> rrHrList.get(i).getHr() != 0)
+                .boxed()
+                .collect(Collectors.toList());
+
+        if (nonZeroIndices.isEmpty()) {
+            logger.error("采集信号无效，无有效心率");
+            return Collections.emptyList();
+        }
+
+        // 2. 处理第一个心率值大于200的情况
+        if (rrHrList.get(0).getHr() > 200) {
+            rrHrList.get(0).setHr(200);
+            rrHrList.get(0).setRRIntervalData((1.0 / 200) * 60);
+        }
+
+        // 3. 处理其他心率值大于200的情况
+        IntStream.range(1, rrHrList.size())
+                .filter(i -> rrHrList.get(i).getHr() > 200)
+                .forEach(i -> {
+                    rrHrList.get(i).setHr(rrHrList.get(i-1).getHr());
+                    rrHrList.get(i).setRRIntervalData(rrHrList.get(i-1).getRRIntervalData());
+                });
+
+        // 4. 创建心率数据副本
+        List<RRData> hrList = rrHrList.stream()
+                .map(data -> new RRData(data.getRRIntervalData(), data.getHr(), data.getSamplingNum()))
+                .collect(Collectors.toList());
+
+        // 5. 处理零心率值(用前一个值替换)
+        int firstNonZeroIndex = nonZeroIndices.get(0);
+        for (int i = firstNonZeroIndex; i < hrList.size(); i++) {
+            if (hrList.get(i).getHr() == 0) {
+                hrList.get(i).setHr(hrList.get(i-1).getHr());
+                hrList.get(i).setRRIntervalData(hrList.get(i-1).getRRIntervalData());
+            }
+        }
+
+        // 6. 如果第一个非零心率不是第一个数据，则删除前面的数据
+        if (firstNonZeroIndex != 0) {
+            hrList = hrList.subList(firstNonZeroIndex, hrList.size());
+        }
+
+        return hrList;
     }
 
     /**
@@ -1112,7 +1343,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
         List<EcgHrData> ecgHrDataList = new ArrayList<>();
         EcgHrData ecgHrData = new EcgHrData();
         ecgHrData.setEcgFileName(file.getName());
-        ecgHrData.setEcgDataTime(new Date());//暂设为当前日期，后续变更为从源数据文件读取
+        //ecgHrData.setEcgDataTime(new Date());//暂设为当前日期，后续变更为从源数据文件读取
         ecgHrData.setEcgList(ecgList);
         ecgHrDataList.add(ecgHrData);
 
