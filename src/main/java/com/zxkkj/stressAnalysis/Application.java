@@ -1,4 +1,5 @@
 package com.zxkkj.stressAnalysis;
+import cn.hutool.core.io.FileUtil;
 import com.alibaba.fastjson.JSONObject;
 import com.zxkkj.stressAnalysis.constants.Constants;
 import com.zxkkj.stressAnalysis.model.AnalysisReult;
@@ -10,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * 应用程序
@@ -33,11 +35,13 @@ public class Application {
 
             if (args[0].equals(Constants.fclpType.automatic.getValue())){
 
-                File[] files = paramVerify(args);
+                List<File> files = paramVerify(args);
+                executeResult = startAnalysis(files,args[2]);
+                /*File[] files = paramVerify(args);
 
                 if (files != null && files.length > 0){
                     executeResult = startAnalysis(files,args[2]);
-                }
+                }*/
 
             }else if (args[0].equals(Constants.fclpType.manual.getValue())){
 
@@ -55,10 +59,15 @@ public class Application {
 
     }
 
-    private static File[] paramVerify(String[] args) {
+    private static List<File> paramVerify(String[] args) {
         String folderPath = args[1];
         File folder = new File(folderPath);
-        if (!folder.exists() || !folder.isDirectory()) {
+        List<File> fileList = FileUtil.loopFiles(folderPath);
+        if (fileList == null || fileList.size() == 0) {
+            logger.error("文件不存在",folderPath);
+            return null;
+        }
+        /*if (!folder.exists() || !folder.isDirectory()) {
             logger.error("指定的路径不存在或不是一个文件夹:{}",folderPath);
             return null;
         }
@@ -66,8 +75,8 @@ public class Application {
         if (files == null || files.length == 0) {
             logger.error("文件夹中没有找到任何.dat文件:{}",folderPath);
             return null;
-        }
-        return files;
+        }*/
+        return fileList;
     }
 
     private static String[] simulationParam(String[] args,int type) {
@@ -76,8 +85,8 @@ public class Application {
             //自动计算
             args = new String[3];
             args[0] = "1";
-            args[1] = "/Users/heyuqi/Desktop/stress/测试数据/腰带原始数据/";
-            args[2] = "/Users/heyuqi/Desktop/stress/stressOut/";
+            args[1] = "/Users/heyuqi/Desktop/stress/test-临时/BeltData2025-5-14_8-42-31.dat";
+            args[2] = "/Users/heyuqi/Desktop/stress/stressOut";
         }else if (type == 2){
             //手动选取
             args = new String[5];
@@ -104,7 +113,7 @@ public class Application {
      * @return
      * @throws IOException
      */
-    public static ExecuteResult startAnalysis(File[] files,String outTxtPath) throws IOException {
+    public static ExecuteResult startAnalysis(List<File> files,String outTxtPath) throws IOException {
         //执行结果: 成功多少 失败多少
         ExecuteResult executeResult = new ExecuteResult();
         int successCount = 0;
