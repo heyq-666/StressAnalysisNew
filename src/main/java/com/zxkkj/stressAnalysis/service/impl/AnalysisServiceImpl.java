@@ -44,10 +44,11 @@ public class AnalysisServiceImpl implements IAnalysisService {
     private static final double PULSE_THRESHOLD = 200;
 
     @Override
-    public EcgHrData loadDataByLocalFile(String fileName,String filePath) throws IOException {
+    public EcgHrData loadDataByLocalFile(String fileName,String filePath) {
         // 使用内存映射文件提高大文件读取性能
-        try (FileChannel channel = FileChannel.open(Paths.get(filePath), StandardOpenOption.READ)) {
+        /*try (FileChannel channel = FileChannel.open(Paths.get(filePath), StandardOpenOption.READ)) {
             long fileSize = channel.size();
+            logger.info("======fileSize:{}",fileSize);
             ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, fileSize);
 
             // 查找第一个帧头位置
@@ -57,7 +58,65 @@ public class AnalysisServiceImpl implements IAnalysisService {
             }
 
             return parseECGData(fileName,buffer,firstHeaderPos);
+        }catch (IOException e){
+            logger.info("======loadDataByLocalFile error:{}",e.getMessage());
         }
+        return null;*/
+        try (FileInputStream fis = new FileInputStream(filePath)){
+            BufferedInputStream bis = new BufferedInputStream(fis);
+            // 读取整个文件到字节数组
+            byte[] fileBytes = readAllBytes(bis);
+            ByteBuffer buffer = ByteBuffer.wrap(fileBytes);
+            // 查找第一个帧头位置
+            int firstHeaderPos = findFirstHeader(buffer);
+            if (firstHeaderPos == -1) {
+                throw new RuntimeException("未找到数据帧头");
+            }
+            return parseECGData(fileName,buffer,firstHeaderPos);
+        }catch (IOException e){
+            logger.info("======loadDataByLocalFile error:{}",e.getMessage());
+        }
+        return null;
+    }
+
+    private static byte[] readAllBytes(BufferedInputStream bis) throws IOException {
+        byte[] buffer = new byte[8192];
+        int bytesRead;
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        while ((bytesRead = bis.read(buffer)) != -1) {
+            output.write(buffer, 0, bytesRead);
+        }
+        return output.toByteArray();
+    }
+
+    public List<Integer> loadDataByLoaclFile(File file) throws IOException {
+
+        BufferedInputStream in = null;
+        ByteArrayOutputStream out = null;
+        byte[] content = null;
+        List<Integer> list = new ArrayList();
+        try {
+            long before = System.currentTimeMillis();
+            in = new BufferedInputStream(new FileInputStream(file));
+            out = new ByteArrayOutputStream(1024);
+            byte[] temp = new byte[1024];
+            int size = 0;
+            while((size = in.read(temp)) != -1){
+                out.write(temp, 0, size);
+            }
+            content = out.toByteArray();
+            //byte数组转为int存入list
+            for (int i = 0; i < content.length; i++) {
+                list.add(content[i] & 0xFF);
+            }
+            long after = System.currentTimeMillis();
+            logger.info("读取并转换数据的耗时："+(after - before));
+        }catch (IOException e){
+            e.printStackTrace();
+        }finally {
+            in.close();
+        }
+        return list;
     }
 
     private static EcgHrData parseECGData(String fileName,ByteBuffer buffer, int startPos) {
@@ -176,7 +235,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
             processedList.add(value);
         }
         //输出心电波数据-用于调试
-        outEcgData(file,processedList);
+        //outEcgData(file,processedList);
         return new EcgHrData(parseResult.getEcgFileName(),parseResult.getEcgDataTime(),parseResult.getFrameNumbers(),processedList,null);
     }
 

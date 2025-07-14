@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.math.BigDecimal;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -23,6 +24,7 @@ public class Application {
     private static Logger logger = LoggerFactory.getLogger(Application.class);
 
     public static void main(String[] args) {
+        logger.info("程序启动，入参: {}", Arrays.toString(args));
         //模拟入参方法，调试用
         //args = simulationParam(args,1);
         try {
@@ -30,18 +32,14 @@ public class Application {
                 logger.error("请提供.dat数据文件夹路径作为参数");
                 return;
             }
-
             ExecuteResult executeResult = new ExecuteResult();
 
             if (args[0].equals(Constants.fclpType.automatic.getValue())){
 
                 List<File> files = paramVerify(args);
-                executeResult = startAnalysis(files,args[2]);
-                /*File[] files = paramVerify(args);
-
-                if (files != null && files.length > 0){
+                if (files != null && files.size() > 0){
                     executeResult = startAnalysis(files,args[2]);
-                }*/
+                }
 
             }else if (args[0].equals(Constants.fclpType.manual.getValue())){
 
@@ -61,21 +59,11 @@ public class Application {
 
     private static List<File> paramVerify(String[] args) {
         String folderPath = args[1];
-        File folder = new File(folderPath);
+        if (!FileUtil.exist(folderPath)) {
+            logger.error("filePath: %s is not exist", folderPath);
+            return null;
+        }
         List<File> fileList = FileUtil.loopFiles(folderPath);
-        if (fileList == null || fileList.size() == 0) {
-            logger.error("文件不存在",folderPath);
-            return null;
-        }
-        /*if (!folder.exists() || !folder.isDirectory()) {
-            logger.error("指定的路径不存在或不是一个文件夹:{}",folderPath);
-            return null;
-        }
-        File[] files = folder.listFiles((dir, name) -> name.toLowerCase().endsWith(".dat"));
-        if (files == null || files.length == 0) {
-            logger.error("文件夹中没有找到任何.dat文件:{}",folderPath);
-            return null;
-        }*/
         return fileList;
     }
 
@@ -85,8 +73,8 @@ public class Application {
             //自动计算
             args = new String[3];
             args[0] = "1";
-            args[1] = "/Users/heyuqi/Desktop/stress/test-临时/BeltData2025-5-14_8-42-31.dat";
-            args[2] = "/Users/heyuqi/Desktop/stress/stressOut";
+            args[1] = "/Users/heyuqi/Desktop/stress/test-临时/BeltData2025-5-15_11-55-33.dat";
+            args[2] = "/Users/heyuqi/Desktop/stress/stressOut/";
         }else if (type == 2){
             //手动选取
             args = new String[5];
@@ -135,7 +123,6 @@ public class Application {
                 successCount++;
             }catch (Exception e) {
                 failureCount++;
-
                 logger.error("file: {} analysis failure - 原因: {}" ,fileName, e.getMessage());
             }
         }

@@ -19,7 +19,7 @@ public interface IAnalysisService {
      * @return
      * @throws IOException
      */
-    EcgHrData loadDataByLocalFile(String fileName, String filePath) throws IOException;
+    EcgHrData loadDataByLocalFile(String fileName, String filePath);
 
     /**
      * 基于整条腰带的数据进行数据分析
