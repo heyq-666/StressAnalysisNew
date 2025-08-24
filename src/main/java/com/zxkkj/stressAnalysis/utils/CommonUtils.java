@@ -1,12 +1,14 @@
 package com.zxkkj.stressAnalysis.utils;
 
 import cn.hutool.core.collection.CollectionUtil;
+import com.zxkkj.stressAnalysis.RRIntervalCalculator;
 import com.zxkkj.stressAnalysis.model.PeakModel;
 import com.zxkkj.stressAnalysis.model.RRData;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Collectors;
 
 public class CommonUtils {
 
@@ -140,6 +142,44 @@ public class CommonUtils {
         return listNew;
     }
 
+    public static List<RRIntervalCalculator.RRIntervalPoint> smoothNew1(List<RRIntervalCalculator.RRIntervalPoint> list, int start,int end, int window) {
+
+        if (CollectionUtil.isEmpty(list) || start > end || list.size() <= start || list.size() <= end) {
+            throw new RuntimeException("参数错误");
+        }
+
+        List<RRIntervalCalculator.RRIntervalPoint> listNew = new ArrayList<>();
+        RRIntervalCalculator.RRIntervalPoint rrData = new RRIntervalCalculator.RRIntervalPoint(
+                new BigDecimal(list.get(0).getHeartRate()).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue(),
+                list.get(0).getHeartRate(),
+                list.get(0).getPosition());
+        listNew.add(rrData);
+        for (int i = start + 1; i < end; i++) {
+            double avg = 0.0;
+            if (i-start < window/2) {
+                int step = i-start;
+                avg = list.stream().skip(start).limit(2 * step + 1).mapToDouble(RRIntervalCalculator.RRIntervalPoint::getHeartRate).sum() / (2 * step + 1);
+            } else if (end - i < window/2){
+                int step = end - i;
+                avg = list.stream().skip(i - step).limit(2*step + 1).mapToDouble(RRIntervalCalculator.RRIntervalPoint::getHeartRate).sum() / (2 * step + 1);
+            } else {
+                avg = list.stream().skip(i - window/2).limit(window).mapToDouble(RRIntervalCalculator.RRIntervalPoint::getHeartRate).sum() / window;
+            }
+            RRIntervalCalculator.RRIntervalPoint rrData1 = new RRIntervalCalculator.RRIntervalPoint(
+                    new BigDecimal(avg).setScale(2,BigDecimal.ROUND_HALF_UP).doubleValue(),
+                    list.get(i).getRrInterval(),
+                    list.get(i).getPosition());
+            listNew.add(rrData1);
+        }
+        RRIntervalCalculator.RRIntervalPoint rrDataEnd = new RRIntervalCalculator.RRIntervalPoint(
+                list.get(list.size()-1).getHeartRate(),
+                list.get(list.size()-1).getRrInterval(),
+                list.get(list.size()-1).getPosition());
+
+        listNew.add(rrDataEnd);
+        return listNew;
+    }
+
     /**
      * 心率均值
      * @param rrListSub
@@ -148,6 +188,12 @@ public class CommonUtils {
     public static double mean(List<RRData> rrListSub) {
 
         double hrAvg = rrListSub.stream().mapToDouble(RRData::getHr).average().getAsDouble();
+        return hrAvg;
+    }
+
+    public static double mean1(List<RRIntervalCalculator.RRIntervalPoint> rrListSub) {
+
+        double hrAvg = rrListSub.stream().mapToDouble(RRIntervalCalculator.RRIntervalPoint::getHeartRate).average().getAsDouble();
         return hrAvg;
     }
 
@@ -349,5 +395,82 @@ public class CommonUtils {
         }
 
         return count > 0 ? sum / count : 0;
+    }
+
+    /**
+     * FCLP段识别
+     * @param hrList
+     */
+    public static List<Integer[]> fclpIdentity(List<RRIntervalCalculator.RRIntervalPoint> hrList) {
+
+        //各fclp段数据
+        List<Integer[]> fclpList = new ArrayList<>();
+        int startHrIndex = 1;
+        int segmentNew1=2000;
+        int segmentNew0=100;
+        while (startHrIndex < hrList.size()){
+            if (startHrIndex + segmentNew1 - 1 < hrList.size()){
+                List<RRIntervalCalculator.RRIntervalPoint> hrListSub = hrList.subList(startHrIndex,(startHrIndex + segmentNew1));
+                List<RRIntervalCalculator.RRIntervalPoint> hrListSmooth = CommonUtils.smoothNew1(hrListSub,0,hrListSub.size() - 1,100);
+                double means = CommonUtils.mean1(hrListSmooth);
+                List<Double> hrListEnd = hrListSmooth.stream().map(item -> {
+                    double hr = CommonUtils.keepTwoDecimal(item.getHeartRate() - means);
+                    return hr;
+                }).collect(Collectors.toList());
+                //获取心率过0点位置
+                List<Integer> passZeroHrNumList = new ArrayList<>();
+                for (int i = 0; i < hrListEnd.size() - 1; i++) {
+                    if (hrListEnd.get(i) * hrListEnd.get(i+1) < 0){
+                        passZeroHrNumList.add(i);
+                    }
+                }
+                //过0点心率的间隔
+                List<Integer> passZeroIntervalNum = new ArrayList<>();
+                for (int i = 0; i < passZeroHrNumList.size() - 1; i++) {
+                    passZeroIntervalNum.add(passZeroHrNumList.get(i + 1) - passZeroHrNumList.get(i));
+                }
+                int passZeroMin = CommonUtils.calculateMinValueInteger(passZeroIntervalNum);
+                int passZeroMax = CommonUtils.calculateMaxValueInteger(passZeroIntervalNum);
+                int sub = passZeroMax - passZeroMin;
+                if (passZeroHrNumList.size() > 2 && passZeroMin > 105 && sub < 200){
+                    fclpList.add(new Integer[]{startHrIndex,startHrIndex + segmentNew1 - 1});
+                    startHrIndex += segmentNew1;
+                }else {
+                    startHrIndex += segmentNew0;
+                }
+            }else {//若不够一个判断长度，则按segment0心率长度进行判断
+                if (hrList.size() - startHrIndex > segmentNew0){
+                    List<RRIntervalCalculator.RRIntervalPoint> hrListSub = hrList.subList(startHrIndex,(startHrIndex + segmentNew0 - 1));
+                    List<RRIntervalCalculator.RRIntervalPoint> hrListSmooth = CommonUtils.smoothNew1(hrListSub,0,hrListSub.size() - 1,100);
+                    double means = CommonUtils.mean1(hrListSmooth);
+                    List<Double> hrListEnd = hrListSmooth.stream().map(item -> {
+                        double hr = CommonUtils.keepTwoDecimal(item.getHeartRate() - means);
+                        return hr;
+                    }).collect(Collectors.toList());
+                    //获取心率过0点位置
+                    List<Integer> passZeroHrNumList = new ArrayList<>();
+                    for (int i = 0; i < hrListEnd.size() - 1; i++) {
+                        if (hrListEnd.get(i) * hrListEnd.get(i+1) < 0){
+                            passZeroHrNumList.add(i);
+                        }
+                    }
+                    //过0点心率的间隔
+                    List<Integer> passZeroIntervalNum = new ArrayList<>();
+                    for (int i = 0; i < passZeroHrNumList.size() - 1; i++) {
+                        passZeroIntervalNum.add(passZeroHrNumList.get(i + 1) - passZeroHrNumList.get(i));
+                    }
+                    int passZeroMin = CommonUtils.calculateMinValueInteger(passZeroIntervalNum);
+                    int passZeroMax = CommonUtils.calculateMaxValueInteger(passZeroIntervalNum);
+                    int sub = passZeroMax - passZeroMin;
+                    if (passZeroHrNumList.size() > 2 && passZeroMin > 105 && sub < 200){
+                        fclpList.add(new Integer[]{startHrIndex,startHrIndex + segmentNew0 - 1});
+                    }
+                    startHrIndex = hrList.size();
+                }else {
+                    startHrIndex = hrList.size();
+                }
+            }
+        }
+        return fclpList;
     }
 }

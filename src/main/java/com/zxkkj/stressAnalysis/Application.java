@@ -26,7 +26,7 @@ public class Application {
     public static void main(String[] args) {
         logger.info("程序启动，入参: {}", Arrays.toString(args));
         //模拟入参方法，调试用
-        //args = simulationParam(args,1);
+        args = simulationParam(args,1);
         try {
             if (args.length == 0) {
                 logger.error("请提供.dat数据文件夹路径作为参数");
@@ -37,6 +37,7 @@ public class Application {
             if (args[0].equals(Constants.fclpType.automatic.getValue())){
 
                 List<File> files = paramVerify(args);
+
                 if (files != null && files.size() > 0){
                     executeResult = startAnalysis(files,args[2]);
                 }
@@ -73,7 +74,7 @@ public class Application {
             //自动计算
             args = new String[3];
             args[0] = "1";
-            args[1] = "/Users/heyuqi/Desktop/stress/test-临时/BeltData2025-5-15_11-55-33.dat";
+            args[1] = "/Users/heyuqi/Desktop/stress/测试数据new/BeltData2023-4-10_15-45-41_王斌彪.dat";
             args[2] = "/Users/heyuqi/Desktop/stress/stressOut/";
         }else if (type == 2){
             //手动选取
@@ -101,7 +102,7 @@ public class Application {
      * @return
      * @throws IOException
      */
-    public static ExecuteResult startAnalysis(List<File> files,String outTxtPath) throws IOException {
+    public static ExecuteResult startAnalysis(List<File> files,String outTxtPath) {
         //执行结果: 成功多少 失败多少
         ExecuteResult executeResult = new ExecuteResult();
         int successCount = 0;

@@ -4,7 +4,6 @@ import cn.hutool.core.collection.CollectionUtil;
 import cn.hutool.core.text.csv.CsvWriter;
 import com.zxkkj.stressAnalysis.constants.Constants;
 import com.zxkkj.stressAnalysis.model.*;
-import com.zxkkj.stressAnalysis.service.FCLPDetector;
 import com.zxkkj.stressAnalysis.service.IAnalysisService;
 import com.zxkkj.stressAnalysis.utils.CommonUtils;
 import com.zxkkj.stressAnalysis.utils.ExcelWriter;
@@ -46,27 +45,10 @@ public class AnalysisServiceImpl implements IAnalysisService {
     @Override
     public EcgHrData loadDataByLocalFile(String fileName,String filePath) {
         // 使用内存映射文件提高大文件读取性能
-        /*try (FileChannel channel = FileChannel.open(Paths.get(filePath), StandardOpenOption.READ)) {
+        try (FileChannel channel = FileChannel.open(Paths.get(filePath), StandardOpenOption.READ)) {
             long fileSize = channel.size();
             logger.info("======fileSize:{}",fileSize);
             ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, fileSize);
-
-            // 查找第一个帧头位置
-            int firstHeaderPos = findFirstHeader(buffer);
-            if (firstHeaderPos == -1) {
-                throw new RuntimeException("未找到数据帧头");
-            }
-
-            return parseECGData(fileName,buffer,firstHeaderPos);
-        }catch (IOException e){
-            logger.info("======loadDataByLocalFile error:{}",e.getMessage());
-        }
-        return null;*/
-        try (FileInputStream fis = new FileInputStream(filePath)){
-            BufferedInputStream bis = new BufferedInputStream(fis);
-            // 读取整个文件到字节数组
-            byte[] fileBytes = readAllBytes(bis);
-            ByteBuffer buffer = ByteBuffer.wrap(fileBytes);
             // 查找第一个帧头位置
             int firstHeaderPos = findFirstHeader(buffer);
             if (firstHeaderPos == -1) {
@@ -78,47 +60,6 @@ public class AnalysisServiceImpl implements IAnalysisService {
         }
         return null;
     }
-
-    private static byte[] readAllBytes(BufferedInputStream bis) throws IOException {
-        byte[] buffer = new byte[8192];
-        int bytesRead;
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        while ((bytesRead = bis.read(buffer)) != -1) {
-            output.write(buffer, 0, bytesRead);
-        }
-        return output.toByteArray();
-    }
-
-    public List<Integer> loadDataByLoaclFile(File file) throws IOException {
-
-        BufferedInputStream in = null;
-        ByteArrayOutputStream out = null;
-        byte[] content = null;
-        List<Integer> list = new ArrayList();
-        try {
-            long before = System.currentTimeMillis();
-            in = new BufferedInputStream(new FileInputStream(file));
-            out = new ByteArrayOutputStream(1024);
-            byte[] temp = new byte[1024];
-            int size = 0;
-            while((size = in.read(temp)) != -1){
-                out.write(temp, 0, size);
-            }
-            content = out.toByteArray();
-            //byte数组转为int存入list
-            for (int i = 0; i < content.length; i++) {
-                list.add(content[i] & 0xFF);
-            }
-            long after = System.currentTimeMillis();
-            logger.info("读取并转换数据的耗时："+(after - before));
-        }catch (IOException e){
-            e.printStackTrace();
-        }finally {
-            in.close();
-        }
-        return list;
-    }
-
     private static EcgHrData parseECGData(String fileName,ByteBuffer buffer, int startPos) {
         List<Integer> frameNumbers = new ArrayList<>();
         List<Double> ecgData = new ArrayList<>();
@@ -134,7 +75,6 @@ public class AnalysisServiceImpl implements IAnalysisService {
             // 检查帧头
             if (buffer.get(position) == FRAME_HEADER[0] &&
                     buffer.get(position + 1) == FRAME_HEADER[1]) {
-
                 // 检查帧尾
                 int trailerPos = position + FRAME_LENGTH - 2;
                 if (trailerPos + 1 < bufferLimit &&
@@ -185,7 +125,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
         AnalysisReult analysisReult = new AnalysisReult();
 
         //提取心电波形数据
-        EcgHrData ecgHrData = this.processECGSignal(file,content);
+        EcgHrData ecgHrData = this.processECGSignal(content);
 
         //存储心电波
         analysisReult.setEcgList(ecgHrData.getEcgList());
@@ -217,7 +157,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
         return analysisReult;
     }
 
-    public EcgHrData processECGSignal(File file,EcgHrData parseResult) {
+    public EcgHrData processECGSignal(EcgHrData parseResult) {
         // 获取原始ECG数据
         List<Double> ecgList = parseResult.getEcgList();
 
@@ -327,7 +267,6 @@ public class AnalysisServiceImpl implements IAnalysisService {
         if (ecgList == null || ecgList.isEmpty()) {
             return new double[0];
         }
-        // 转换为数组提高性能
         double[] ecgArray = ecgList.stream().mapToDouble(i -> i).toArray();
         // 计算总和
         long sum = 0;
@@ -370,9 +309,6 @@ public class AnalysisServiceImpl implements IAnalysisService {
     private void calculationNoFclpHrv(List<Integer[]> fclpList,List<StressIntensityModel> stressList, List<RRData> RRList, AnalysisReult analysisReult) {
 
         List<Integer[]> fclpNo = new ArrayList<>();
-
-        /*fclpNo.add(new Integer[]{1,fclpList.get(0)[0]});
-        fclpNo.add(new Integer[]{fclpList.get(fclpList.size()-1)[1],RRList.size()-1});*/
         if (fclpList.size() == 0 || fclpList == null){
             fclpNo.add(new Integer[]{0,RRList.size() - 1});
             //fclp前的心率均值、最大值、最小值
@@ -1264,24 +1200,6 @@ public class AnalysisServiceImpl implements IAnalysisService {
         }
         //修正高心率插补0心率
         return this.correctHighHeartAndZeroHeart(RR_HRList);
-        /*List<Integer> indList = new ArrayList<>();//非0心率位置集合
-        for (int i = 0; i < RR_HRList.size(); i++) {
-            if (RR_HRList.get(i).getHr() != 0.0){
-                indList.add(i);
-            }
-        }
-        if (indList.size() > 0){
-            for (int i = indList.get(0); i < RR_HRList.size(); i++) {
-                if (RR_HRList.get(i).getHr() == 0.0 && i != 0){
-                    RR_HRList.get(i).setRRIntervalData(RR_HRList.get(i-1).getRRIntervalData());
-                    RR_HRList.get(i).setHr(RR_HRList.get(i-1).getHr());
-                }
-            }
-            if (indList.get(0) != 0){
-                RR_HRList = RR_HRList.subList(indList.get(0),RR_HRList.size());
-            }
-        }
-        return RR_HRList;*/
     }
 
     private List<RRData> correctHighHeartAndZeroHeart(List<RRData> rrHrList) {
