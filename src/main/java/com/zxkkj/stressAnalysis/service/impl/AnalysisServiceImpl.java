@@ -4,7 +4,6 @@ import cn.hutool.core.collection.CollectionUtil;
 import cn.hutool.core.text.csv.CsvWriter;
 import com.zxkkj.stressAnalysis.constants.Constants;
 import com.zxkkj.stressAnalysis.model.*;
-import com.zxkkj.stressAnalysis.service.FCLPDetector;
 import com.zxkkj.stressAnalysis.service.IAnalysisService;
 import com.zxkkj.stressAnalysis.utils.CommonUtils;
 import com.zxkkj.stressAnalysis.utils.ExcelWriter;
@@ -46,7 +45,7 @@ public class AnalysisServiceImpl implements IAnalysisService {
     @Override
     public EcgHrData loadDataByLocalFile(String fileName,String filePath) {
         // 使用内存映射文件提高大文件读取性能
-        /*try (FileChannel channel = FileChannel.open(Paths.get(filePath), StandardOpenOption.READ)) {
+        try (FileChannel channel = FileChannel.open(Paths.get(filePath), StandardOpenOption.READ)) {
             long fileSize = channel.size();
             logger.info("======fileSize:{}",fileSize);
             ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, fileSize);
@@ -57,21 +56,6 @@ public class AnalysisServiceImpl implements IAnalysisService {
                 throw new RuntimeException("未找到数据帧头");
             }
 
-            return parseECGData(fileName,buffer,firstHeaderPos);
-        }catch (IOException e){
-            logger.info("======loadDataByLocalFile error:{}",e.getMessage());
-        }
-        return null;*/
-        try (FileInputStream fis = new FileInputStream(filePath)){
-            BufferedInputStream bis = new BufferedInputStream(fis);
-            // 读取整个文件到字节数组
-            byte[] fileBytes = readAllBytes(bis);
-            ByteBuffer buffer = ByteBuffer.wrap(fileBytes);
-            // 查找第一个帧头位置
-            int firstHeaderPos = findFirstHeader(buffer);
-            if (firstHeaderPos == -1) {
-                throw new RuntimeException("未找到数据帧头");
-            }
             return parseECGData(fileName,buffer,firstHeaderPos);
         }catch (IOException e){
             logger.info("======loadDataByLocalFile error:{}",e.getMessage());
