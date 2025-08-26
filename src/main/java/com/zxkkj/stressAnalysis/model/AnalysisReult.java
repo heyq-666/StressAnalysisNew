@@ -1,5 +1,6 @@
 package com.zxkkj.stressAnalysis.model;
 
+import com.zxkkj.stressAnalysis.calculator.FCLPDetector;
 import lombok.Data;
 
 import java.io.Serializable;
@@ -13,7 +14,6 @@ import java.util.List;
 public class AnalysisReult implements Serializable {
 
     public int fclpIsExit;//1：存在fclp、0：不存在fclp
-
     /**
      * 非fclp阶段hrv
      */
@@ -35,9 +35,24 @@ public class AnalysisReult implements Serializable {
     List<Double> hrList = new ArrayList<>();
 
     /**
+     * 呼吸波
+     */
+    private List<Double> breathData = new ArrayList<>();
+
+    /**
+     * 呼吸率
+     */
+    List<Double[]> breathRate = new ArrayList<>();
+
+    /**
+     * 加速度
+     */
+    private List<Double[]> yzxData = new ArrayList<>();
+
+    /**
      * fclp段
      */
-    List<Integer[]> fclpList = new ArrayList<>();
+    private List<FCLPDetector.FCLPSegment> fclpSegments = new ArrayList<>();
 
     /**
      * fclp个数
@@ -47,7 +62,7 @@ public class AnalysisReult implements Serializable {
     /**
      * 应激强度值
      */
-    List<StressIntensityModel> stressIntensityModelList = new ArrayList<>();
+    List<StressPoint> stressPoints = new ArrayList<>();
 
     /**
      * RR间期数组

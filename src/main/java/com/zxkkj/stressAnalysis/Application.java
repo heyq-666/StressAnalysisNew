@@ -1,157 +1,59 @@
 package com.zxkkj.stressAnalysis;
-import cn.hutool.core.io.FileUtil;
-import com.alibaba.fastjson.JSONObject;
-import com.zxkkj.stressAnalysis.constants.Constants;
-import com.zxkkj.stressAnalysis.model.AnalysisReult;
-import com.zxkkj.stressAnalysis.model.EcgHrData;
-import com.zxkkj.stressAnalysis.model.ExecuteResult;
+
+import com.zxkkj.stressAnalysis.service.AnalysisServiceFactory;
 import com.zxkkj.stressAnalysis.service.IAnalysisService;
-import com.zxkkj.stressAnalysis.service.impl.AnalysisServiceImpl;
+import com.zxkkj.stressAnalysis.utils.ArgsParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.io.*;
 import java.math.BigDecimal;
 import java.util.Arrays;
-import java.util.List;
+import java.util.Optional;
 
-/**
- * 应用程序
- * @author javabage
- * @date 2022/7/27
- */
 public class Application {
 
     private static Logger logger = LoggerFactory.getLogger(Application.class);
-
     public static void main(String[] args) {
-        logger.info("程序启动，入参: {}", Arrays.toString(args));
-        //模拟入参方法，调试用
-        args = simulationParam(args,1);
         try {
-            if (args.length == 0) {
-                logger.error("请提供.dat数据文件夹路径作为参数");
-                return;
+            logger.info("程序启动，入参: {}", Arrays.toString(args));
+
+            // 参数预处理-调试用
+            //String[] processedArgs = simulationParam(1);
+
+            ArgsParser parser = new ArgsParser(args);
+
+            Optional<IAnalysisService> serviceOptional = AnalysisServiceFactory.getService(parser.getType());
+
+            if (serviceOptional.isPresent()) {
+                serviceOptional.get().analyze(parser);
+            } else {
+                throw new IllegalArgumentException("不支持的参数类型");
             }
-            ExecuteResult executeResult = new ExecuteResult();
-
-            if (args[0].equals(Constants.fclpType.automatic.getValue())){
-
-                List<File> files = paramVerify(args);
-
-                if (files != null && files.size() > 0){
-                    executeResult = startAnalysis(files,args[2]);
-                }
-
-            }else if (args[0].equals(Constants.fclpType.manual.getValue())){
-
-                executeResult = startAnalysisManual(args[1],args[2],args[3],args[4]);
-
-            }else {
-                throw new RuntimeException("parameter transfer error");
-            }
-
-            logger.info("analysis finished: %s", JSONObject.toJSONString(executeResult));
-
         } catch (Exception e) {
-            logger.error("startAnalysis error,", e);
+            logger.error("程序执行失败: {}", e.getMessage(), e);
+            throw new RuntimeException("parameter transfer error");
         }
-
     }
 
-    private static List<File> paramVerify(String[] args) {
-        String folderPath = args[1];
-        if (!FileUtil.exist(folderPath)) {
-            logger.error("filePath: %s is not exist", folderPath);
-            return null;
-        }
-        List<File> fileList = FileUtil.loopFiles(folderPath);
-        return fileList;
-    }
-
-    private static String[] simulationParam(String[] args,int type) {
-
+    private static String[] simulationParam(int type) {
         if (type == 1){
             //自动计算
-            args = new String[3];
-            args[0] = "1";
-            args[1] = "/Users/heyuqi/Desktop/stress/测试数据new/BeltData2023-4-10_15-45-41_王斌彪.dat";
-            args[2] = "/Users/heyuqi/Desktop/stress/stressOut/";
+           return new String[]{
+                    "1",
+                    "/Users/heyuqi/Desktop/stress/测试数据new/BeltData2023-4-10_15-45-41_王斌彪.dat",
+                    "/Users/heyuqi/Desktop/stress/stressOut/"};
         }else if (type == 2){
             //手动选取
-            args = new String[5];
-            args[0] = "2";//（1：代表自动计算、2：代表手动选取）
-            args[1] = "1";//FCLP序号
-            args[2] = "2";//FCLP阶段（1：代表FCLP前、2：代表FCLP间期、3：代表FCLP后）
-            args[4] = "C:\\Users\\Heyq\\Desktop\\streeTest\\";
-            String[] ss = new String[2500];
+            //args[0]:1：代表自动计算、2：代表手动选取
+            //args[1]:FCLP序号
+            //args[2]:FCLP阶段（1：代表FCLP前、2：代表FCLP间期、3：代表FCLP后）
+            String[] temp = new String[2500];
             StringBuilder stringBuilder = new StringBuilder();
             for (int i = 0; i < 2500; i++) {
-                ss[i] = new BigDecimal(Math.random() * (120.0 - 70.0) + 70.0).setScale(2,BigDecimal.ROUND_HALF_UP).toString();
-                stringBuilder.append(ss[i] + ",");
+                temp[i] = new BigDecimal(Math.random() * (120.0 - 70.0) + 70.0).setScale(2,BigDecimal.ROUND_HALF_UP).toString();
+                stringBuilder.append(temp[i] + ",");
             }
-            String args3 = String.valueOf(stringBuilder);
-            args[3] = args3;
+            return new String[]{"2","1","2",stringBuilder.toString(),"/Users/heyuqi/Desktop/stress/stressOut/"};
         }
-        return args;
-    }
-
-    /**
-     * 数据分析-基于整个腰带数据进行分析
-     * @param files
-     * @param outTxtPath
-     * @return
-     * @throws IOException
-     */
-    public static ExecuteResult startAnalysis(List<File> files,String outTxtPath) {
-        //执行结果: 成功多少 失败多少
-        ExecuteResult executeResult = new ExecuteResult();
-        int successCount = 0;
-        int failureCount = 0;
-        IAnalysisService analysisService = new AnalysisServiceImpl();
-        for (File file : files){
-            String fileName = file.getName();
-            String filePath = file.getAbsolutePath();
-            logger.info("file:{} begin analysis:{}", fileName);
-            try {
-                EcgHrData content = analysisService.loadDataByLocalFile(fileName,filePath);
-
-                AnalysisReult analysisResult = analysisService.executeAnalysis(content,file);
-
-                analysisService.outAnalysisResult(analysisResult,outTxtPath,file);
-
-                logger.info("file: {} analysis success", fileName);
-
-                successCount++;
-            }catch (Exception e) {
-                failureCount++;
-                logger.error("file: {} analysis failure - 原因: {}" ,fileName, e.getMessage());
-            }
-        }
-        executeResult.setSuccessCount(successCount);
-        executeResult.setFailCount(failureCount);
-        return executeResult;
-    }
-
-    /**
-     * 基于手动选取的FCLP前、间、后进行数据分析
-     * @param fclpNum
-     * @param fclpStage
-     * @param hrArray
-     * @param outTxtPath
-     * @return
-     * @throws IOException
-     */
-    public static ExecuteResult startAnalysisManual(String fclpNum,String fclpStage,String hrArray,String outTxtPath) throws IOException {
-
-        //执行结果: 成功多少 失败多少
-        ExecuteResult executeResult = new ExecuteResult();
-
-        IAnalysisService analysisService = new AnalysisServiceImpl();
-
-        AnalysisReult analysisResult = analysisService.executeAnalysisManual(fclpNum,fclpStage,hrArray,outTxtPath);
-
-        analysisService.outAnalysisResultManual(analysisResult,outTxtPath);
-
-        return executeResult;
+        return null;
     }
 }

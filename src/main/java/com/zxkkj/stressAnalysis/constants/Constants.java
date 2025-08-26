@@ -2,6 +2,9 @@ package com.zxkkj.stressAnalysis.constants;
 
 import lombok.Getter;
 
+import java.util.Arrays;
+import java.util.Optional;
+
 /**
  * @author javabage
  * @date 2022/8/1
@@ -24,10 +27,6 @@ public class Constants {
     }
 
     public enum fclpType{
-
-        automatic("1"),//自动计算
-        manual("2"),//手动选取
-
         before("1"),//fclp前
         inter("2"),//fclp间
         after("3");//fclp后
@@ -37,6 +36,23 @@ public class Constants {
 
         fclpType(String value){
             this.value = value;
+        }
+    }
+
+    public enum AnalysisType{
+        automatic("1"),//自动计算
+        manual("2");//手动选取
+        @Getter
+        private String value;
+
+        AnalysisType(String value) {
+            this.value = value;
+        }
+
+        public static Optional<AnalysisType> fromValue(String value) {
+            return Arrays.stream(values())
+                    .filter(t -> t.getValue().equals(value))
+                    .findFirst();
         }
     }
 
