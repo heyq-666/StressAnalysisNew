@@ -86,7 +86,7 @@ public class AutomaticAnalysisServiceImpl implements IAnalysisService {
                 analysisResult.setFclpIsExit(CollectionUtils.isEmpty(fclpSegments) ? 0 : 1);
                 analysisResult.setHrvList(noFCLPHrvCalculator.getHrvList());
                 analysisResult.setEvaluatConclusionList(evaluatConclusions);
-                analysisResult.setEcgList(ecgDataProcessor.getEcgData());
+                analysisResult.setEcgList(ecgDataProcessor.getEcgMeanFilter());
                 analysisResult.setHrList(rrIntervalCalculator.getHeartRate().stream().map(v -> v.getHeartRate()).collect(Collectors.toList()));
                 analysisResult.setBreathData(ecgDataProcessor.getBreathData());
                 analysisResult.setBreathRate(breathRateCalculator.getBreathRate());
